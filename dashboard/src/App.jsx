@@ -624,7 +624,10 @@ function App() {
   const Sidebar = () => {
     const navItems = [
       { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator' },
-      ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '02', icon: History, label: 'History' }] : []),
+      // Single-user self-host fork: history is just a live scan of OUTPUT_DIR
+      // (see GET /api/history), so it's always available — no sign-in/plan
+      // gate to check, unlike upstream's cloud-only library.
+      { id: 'history', ord: '02', icon: History, label: 'History' },
       { id: 'settings', ord: '02', icon: Settings, label: 'Settings' },
     ];
 
@@ -880,7 +883,11 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                {/* /api/projects/{id}/restore is cloud/R2-only (404s in this
+                    self-host fork) — reopening a past project instead reuses
+                    focusJob, the same path the JobSwitcher uses to re-focus
+                    any job still recoverable from OUTPUT_DIR. */}
+                <HistoryTab onOpenProject={focusJob} />
               </div>
             </div>
           )}

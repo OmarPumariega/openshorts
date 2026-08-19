@@ -1747,6 +1747,101 @@ async def get_source_video(job_id: str):
     return FileResponse(source_path, media_type="video/mp4")
 
 
+@app.get("/api/history")
+async def get_history(limit: int = 50):
+    """List past clip-generation projects still on disk (History tab).
+
+    Self-host, single-user, no database: "history" is just a scan of
+    OUTPUT_DIR for job folders that still have a metadata JSON, exactly the
+    same source _recover_jobs_from_disk() reads at startup. There is no
+    concept of "whose job" — one operator, protected by Caddy basic auth in
+    production — so nothing here is scoped or authenticated beyond that.
+
+    Purely a reflection of what's physically on disk: a project vanishes from
+    this list the moment cleanup_jobs() purges its folder (CLEANUP_RETENTION_HOURS,
+    default 48h), which is also why the response is never cached.
+    """
+    limit = max(1, min(limit, 200))
+    thumbs_name = os.path.basename(THUMBNAILS_DIR)
+
+    try:
+        job_ids = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        job_ids = []
+
+    entries = []
+    for job_id in job_ids:
+        if job_id == thumbs_name:
+            continue
+        job_dir = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_dir):
+            continue
+        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+        if not meta_files:
+            continue
+        meta_path = meta_files[0]
+
+        # One bad job (corrupt/partial metadata.json) must not 500 the whole
+        # history — skip it and keep going.
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            base_name = os.path.basename(meta_path).replace("_metadata.json", "")
+            shorts = data.get('shorts', []) or []
+
+            # Prefer the live in-memory job's clips when present — they track
+            # post-processing renames (subtitled_/hook_/recut_) the on-disk
+            # metadata never gets rewritten with. Falls back to the canonical
+            # file the pipeline would have written, same as download-all.
+            mem_clips = ((jobs.get(job_id) or {}).get('result') or {}).get('clips') or []
+
+            clips = []
+            for i, clip in enumerate(shorts):
+                url = None
+                if i < len(mem_clips):
+                    url = (mem_clips[i] or {}).get('video_url')
+                url = url or clip.get('video_url')
+                if not url:
+                    filename = _canonical_clip_file(job_dir, base_name, i)
+                    if os.path.exists(os.path.join(job_dir, filename)):
+                        url = f"/videos/{job_id}/{filename}"
+                clips.append({
+                    "index": i,
+                    "video_url": url,
+                    "title": clip.get('video_title_for_youtube_short'),
+                    "hook": clip.get('viral_hook_text'),
+                    "start": clip.get('start'),
+                    "end": clip.get('end'),
+                })
+
+            try:
+                created_at_ts = os.path.getmtime(meta_path)
+            except OSError:
+                created_at_ts = os.path.getmtime(job_dir)
+
+            title = (
+                (shorts[0].get('video_title_for_youtube_short') if shorts else None)
+                or (base_name.replace('_', ' ').strip() if base_name else None)
+                or "Untitled project"
+            )
+
+            entries.append({
+                "job_id": job_id,
+                "title": title,
+                "created_at": datetime.fromtimestamp(created_at_ts, tz=timezone.utc).isoformat(),
+                "clip_count": len(shorts),
+                "clips": clips,
+                "source_available": _locate_source(job_id) is not None,
+            })
+        except Exception as e:
+            print(f"⚠️ /api/history: skipping unreadable job {job_id}: {e}")
+            continue
+
+    entries.sort(key=lambda e: e['created_at'], reverse=True)
+    return {"projects": entries[:limit]}
+
+
 @app.get("/api/jobs/{job_id}/download-all")
 async def download_all_clips(job_id: str, request: Request):
     """Bundle the current version of every clip of a job into one ZIP."""
