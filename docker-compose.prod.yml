@@ -1,0 +1,74 @@
+# Production stack for the VPS. Only `caddy` publishes ports to the host —
+# backend/renderer/frontend talk to each other over the compose network by
+# service name. Bring up with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requires a populated .env next to this file (copy .env.example).
+services:
+  backend:
+    build: .
+    container_name: openshorts-backend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./output:/app/output
+      - ./uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  renderer:
+    build:
+      context: .
+      dockerfile: render-service/Dockerfile
+    container_name: openshorts-renderer
+    restart: unless-stopped
+    volumes:
+      - ./output:/output
+    environment:
+      - REMOTION_BUNDLE_PATH=/app/remotion
+      - OUTPUT_DIR=/output
+      - PORT=3100
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./dashboard
+      target: prod
+      args:
+        # Empty = same-origin: Caddy serves the SPA and proxies /api on the
+        # same domain, so the frontend just calls relative paths.
+        VITE_API_URL: ""
+    container_name: openshorts-frontend
+    restart: unless-stopped
+
+  caddy:
+    build: ./caddy
+    container_name: openshorts-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:
