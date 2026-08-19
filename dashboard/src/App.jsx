@@ -438,6 +438,9 @@ function App() {
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,
+        // Array for the JSON (URL) path; joined to a string below for FormData
+        // (form fields are always strings) — /api/process accepts both shapes.
+        layouts: data.layouts || null,
       };
 
       if (data.type === 'url') {
@@ -455,7 +458,8 @@ function App() {
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
         for (const [k, v] of Object.entries(advanced)) {
-          if (v != null) formData.append(k, v);
+          if (v == null) continue;
+          formData.append(k, Array.isArray(v) ? v.join(',') : v);
         }
         body = formData;
       }
@@ -783,7 +787,7 @@ function App() {
                   </p>
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} geminiConfigured={geminiConfigured} llmProvider={llmProvider} />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>

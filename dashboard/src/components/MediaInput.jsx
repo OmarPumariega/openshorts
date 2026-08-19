@@ -7,7 +7,7 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
-export default function MediaInput({ onProcess, isProcessing }) {
+export default function MediaInput({ onProcess, isProcessing, geminiConfigured, llmProvider }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
@@ -16,6 +16,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [acknowledged, setAcknowledged] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
+    // Sticky per-browser, not per-video: someone who always records this way
+    // shouldn't have to re-check it on every upload. Off by default — it's a
+    // deliberate opt-in (see screencast_layout.py's own reasoning: blind
+    // detection on arbitrary content hurts as many clips as it fixes).
+    const [screencastLayout, setScreencastLayout] = useState(
+        () => { try { return localStorage.getItem('os_screencast_layout') === '1'; } catch { return false; } });
+    useEffect(() => {
+        try { localStorage.setItem('os_screencast_layout', screencastLayout ? '1' : '0'); } catch { /* ignore */ }
+    }, [screencastLayout]);
     // Advanced generation controls — empty string means "let the AI decide",
     // which keeps the default pipeline behavior untouched.
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -68,6 +77,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
             clipMaxSeconds: clipMaxSeconds || null,
+            layouts: screencastLayout ? ['screencast'] : null,
         };
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -219,6 +229,32 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
+                </div>
+
+                {/* Screencast layout: full-width screen content on top, webcam framed
+                    below — instead of the default face-tracked crop zooming into a
+                    slice of the shared screen. Opt-in, sticky across uploads. */}
+                <div className="mt-4 p-3 rounded-input border border-rule2">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={screencastLayout}
+                            onChange={(e) => setScreencastLayout(e.target.checked)}
+                            className="mt-0.5 accent-[var(--color-accent)] cursor-pointer"
+                        />
+                        <span className="text-xs text-ink2">
+                            <span className="text-ink font-medium">Screen recording + webcam</span>{' '}
+                            — keeps the shared screen full width instead of cropping into it, with your
+                            face framed in a band underneath. Turn this on if your videos are tutorials/
+                            screencasts with a webcam bubble, not talking-head footage.
+                        </span>
+                    </label>
+                    {screencastLayout && llmProvider === 'openrouter' && (
+                        <p className="mt-2 ml-6 text-[11px] text-warn leading-relaxed">
+                            This needs a real <code>GEMINI_API_KEY</code> (uploads the video to Gemini directly) —
+                            it won't work over OpenRouter. {!geminiConfigured && 'None is configured on this server, so it will silently fall back to normal framing.'}
+                        </p>
+                    )}
                 </div>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
