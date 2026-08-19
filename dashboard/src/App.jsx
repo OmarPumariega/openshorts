@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Youtube, Instagram, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, Globe, RotateCcw, AlertTriangle, KeyRound, Mail, Loader2, Download } from 'lucide-react';
+import { Sparkles, Youtube, Instagram, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, Globe, RotateCcw, AlertTriangle, KeyRound, Mail, Loader2, Download, Type } from 'lucide-react';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
@@ -18,6 +18,9 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
+import {
+  CAPTION_PRESETS, presetToStyle, loadDefaultStyle, saveDefaultStyle, clearDefaultStyle,
+} from './lib/subtitleStyle';
 
 // Simple TikTok icon sine Lucide might not have it or it varies
 const TikTokIcon = ({ size = 16, className = "" }) => (
@@ -49,6 +52,18 @@ function App() {
   // the ephemeral local /videos/ files have been cleaned up (e.g. after a reload).
   const [durableClips, setDurableClips] = useState({});
   const [showKeyModal, setShowKeyModal] = useState(false);
+  // User's saved default subtitle style (Settings > Default subtitle style,
+  // or "save as my default style" inside any clip's subtitle editor). null =
+  // no profile saved, new videos keep the server's factory-default look.
+  const [defaultStyle, _setDefaultStyleState] = useState(() => loadDefaultStyle());
+  const setDefaultStyle = (styleOrNull) => {
+    _setDefaultStyleState(styleOrNull);
+    if (styleOrNull) saveDefaultStyle(styleOrNull);
+    else clearDefaultStyle();
+  };
+  // One auto-apply per job — a ref (not state) so it survives re-renders
+  // without retriggering the effect that reads it.
+  const autoStyledJobRef = useRef(null);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
@@ -219,6 +234,20 @@ function App() {
       if (data.result) setResults(data.result);
     } catch { /* keep current results */ }
   };
+
+  // Auto-apply the user's saved default subtitle style the moment a job's
+  // clips are ready — no button, no need to open the subtitle editor per
+  // clip. Fires once per job (autoStyledJobRef), and only when a profile is
+  // actually saved; otherwise clips keep the server's factory-default look,
+  // unchanged from before this feature existed.
+  useEffect(() => {
+    if (status !== 'complete' || !jobId || !defaultStyle) return;
+    if (!results?.clips?.length) return;
+    if (autoStyledJobRef.current === jobId) return;
+    autoStyledJobRef.current = jobId;
+    handleBulkSubtitles(defaultStyle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, jobId, results, defaultStyle]);
 
   const handleDownloadAll = async () => {
     if (!jobId) return;
@@ -397,6 +426,7 @@ function App() {
     setQualityGate(null);
     setProjectState(null);
     setNoSource(false);
+    autoStyledJobRef.current = null; // new job — allow the default style to auto-apply again
 
     try {
       let body;
@@ -696,6 +726,49 @@ function App() {
                     Running via OpenRouter (moment detection only) — "auto edit" and "effects" upload the clip
                     to Gemini's native video API directly and need a real <code>GEMINI_API_KEY</code> to work.
                   </p>
+                )}
+              </div>
+
+              <div className="card p-6 mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Type size={16} className="text-brass" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">Default subtitle style</h2>
+                  </div>
+                  {defaultStyle
+                    ? <span className="badge-ok"><Check size={12} /> set</span>
+                    : <span className="readout">factory default</span>}
+                </div>
+                <p className="text-xs text-muted mb-4 leading-relaxed">
+                  Applied automatically to every clip of every new video — no need to open the subtitle editor
+                  each time. Pick a look here, or open any clip's "subtitles" editor, customize it exactly how
+                  you want (font, colors, size), and hit "save as my default style" there instead.
+                </p>
+                <div className="grid grid-cols-3 gap-1.5 mb-3">
+                  {CAPTION_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setDefaultStyle(presetToStyle(p))}
+                      className={`px-2 py-1.5 rounded-input border text-xs transition-colors flex items-center gap-1.5 justify-center
+                        ${defaultStyle?.presetId === p.id
+                          ? 'border-[color:var(--color-accent)] text-ink'
+                          : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                      title={p.label}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlightColor }} />
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                {defaultStyle && (
+                  <button
+                    onClick={() => setDefaultStyle(null)}
+                    className="text-xs text-muted hover:text-ink transition-colors"
+                  >
+                    reset to factory default
+                  </button>
                 )}
               </div>
             </div>
