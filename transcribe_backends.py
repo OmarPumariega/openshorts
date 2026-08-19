@@ -109,7 +109,18 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            kwargs = {}
+            if cfg["device"] == "cpu":
+                # faster-whisper/CTranslate2 leaves this at 0 ("pick a
+                # default") if unset, which measured 2.4x SLOWER than an
+                # explicit small thread count on an 8-core box (592s vs 245s
+                # transcribing the same 4-minute sample) — and worse, using
+                # ALL cores (8) was slower still (852s), so more threads is
+                # not just diminishing returns here, it actively regresses.
+                # Tunable because the sweet spot depends on the box (this
+                # was measured on 8 cores; the 6vCPU VPS may want lower).
+                kwargs["cpu_threads"] = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
+            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2], **kwargs)
             _whisper_key = key
     return _whisper_model, cfg["device"]
 
