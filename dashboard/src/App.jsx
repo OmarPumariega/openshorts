@@ -20,7 +20,7 @@ import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 import { loadDefaultStyle, saveDefaultStyle, clearDefaultStyle } from './lib/subtitleStyle';
 import DefaultStyleEditor from './components/DefaultStyleEditor';
-import { loadJobList, saveJobList, titleFor } from './lib/jobList';
+import { loadJobList, saveJobList, titleFor, loadAutoStyledJobs, markJobAutoStyled } from './lib/jobList';
 import JobSwitcher from './components/JobSwitcher';
 
 // Simple TikTok icon sine Lucide might not have it or it varies
@@ -62,11 +62,19 @@ function App() {
     if (styleOrNull) saveDefaultStyle(styleOrNull);
     else clearDefaultStyle();
   };
-  // One auto-apply per job — a ref (not state) so it survives re-renders
-  // without retriggering the effect that reads it. A Set, not a single id:
-  // the background job poller can complete several jobs independently of
-  // whichever one is focused, and each only gets auto-styled once.
-  const autoStyledJobRef = useRef(new Set());
+  // Two-layer guard against auto-applying the default style twice (see
+  // lib/jobList.js for the duplicate-subtitle-burn bug this fixes):
+  //  - autoStyledJobRef (in-memory) blocks re-entry within THIS page load —
+  //    the poller ticks every 2s and would otherwise fire again before the
+  //    first bulk-apply loop even finishes, since results/status don't
+  //    change mid-loop.
+  //  - markJobAutoStyled/loadAutoStyledJobs (persisted) is only written once
+  //    the loop actually finishes with zero errors. A job interrupted by a
+  //    closed tab or reload is deliberately NOT marked done, so the next
+  //    page load retries it — handleBulkSubtitles' skipAlreadyStyled then
+  //    skips whatever clips that earlier attempt did finish, instead of
+  //    re-burning them.
+  const autoStyledJobRef = useRef(loadAutoStyledJobs());
   // Every video this browser has started, tracked independently of which one
   // is on screen — lets starting a new upload not lose one still processing.
   // See lib/jobList.js. jobListRef mirrors the state for the background
@@ -223,7 +231,16 @@ function App() {
   // poller can auto-style a job that finished while it wasn't the one on
   // screen — the progress indicator only lights up when that job IS the one
   // being looked at, so background auto-styling stays invisible.
-  const handleBulkSubtitles = async (options, targetJobId = jobId, targetClips = results?.clips) => {
+  //
+  // skipAlreadyStyled makes the loop resumable: if a previous run got cut off
+  // partway (tab closed mid-job — this is a real thing that happened, see
+  // lib/jobList.js's markJobAutoStyled), clips whose video_url already has a
+  // "subtitled_" prefix are left alone instead of re-burned, and the loop
+  // only spends time on the ones that actually still need it. Only used for
+  // the automatic default-style path — the manual "apply to all" button in
+  // the subtitle editor always re-applies everything, since the user may be
+  // deliberately switching an already-styled clip to a different look.
+  const handleBulkSubtitles = async (options, targetJobId = jobId, targetClips = results?.clips, skipAlreadyStyled = false) => {
     const clips = targetClips || [];
     const total = clips.length;
     if (!total) return;
@@ -232,6 +249,7 @@ function App() {
     let errors = 0;
     for (let i = 0; i < total; i++) {
       if (isFocused) setBulkSub({ running: true, current: i + 1, total, errors });
+      if (skipAlreadyStyled && /\/subtitled_/.test(clips[i].video_url || '')) continue;
       try {
         const res = await apiFetch('/api/subtitle', {
           method: 'POST',
@@ -267,6 +285,7 @@ function App() {
       const data = await pollJob(targetJobId);
       if (isFocused && data.result) setResults(data.result);
     } catch { /* keep current results */ }
+    return errors;
   };
 
   // Auto-apply the user's saved default subtitle style the moment a job's
@@ -278,8 +297,11 @@ function App() {
     if (status !== 'complete' || !jobId || !defaultStyle) return;
     if (!results?.clips?.length) return;
     if (autoStyledJobRef.current.has(jobId)) return;
-    autoStyledJobRef.current.add(jobId);
-    handleBulkSubtitles(defaultStyle, jobId, results.clips);
+    autoStyledJobRef.current.add(jobId); // block re-entry this session; not yet persisted
+    handleBulkSubtitles(defaultStyle, jobId, results.clips, true).then((errs) => {
+      if (errs === 0) markJobAutoStyled(jobId); // fully done — persist so it never retries
+      else autoStyledJobRef.current.delete(jobId); // partial/failed — eligible for retry next load
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, jobId, results, defaultStyle]);
 
@@ -419,11 +441,14 @@ function App() {
           const data = await pollJob(j.jobId);
           if (data.status === 'completed') {
             upsertJob(j.jobId, { status: 'complete' });
-            // Same auto-apply the focused job's effect does below, just for
+            // Same auto-apply the focused job's effect does above, just for
             // a job nobody is currently looking at.
             if (defaultStyle && data.result?.clips?.length && !autoStyledJobRef.current.has(j.jobId)) {
               autoStyledJobRef.current.add(j.jobId);
-              handleBulkSubtitles(defaultStyle, j.jobId, data.result.clips);
+              handleBulkSubtitles(defaultStyle, j.jobId, data.result.clips, true).then((errs) => {
+                if (errs === 0) markJobAutoStyled(j.jobId);
+                else autoStyledJobRef.current.delete(j.jobId);
+              });
             }
           } else if (data.status === 'failed') {
             upsertJob(j.jobId, { status: 'error' });

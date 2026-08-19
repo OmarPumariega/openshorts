@@ -29,6 +29,38 @@ export function saveJobList(list) {
     }
 }
 
+// Which jobs have already had the default subtitle style auto-applied.
+// MUST be persisted, not just an in-memory ref/Set: a bare ref resets on
+// every page reload, so a completed job with a saved default style would
+// get re-styled from scratch (all N clips, one POST /api/subtitle each)
+// every time the page reloaded — burning duplicate "subtitled_<ts>_..."
+// files on disk and, worse, racing a fresh in-progress run against
+// whatever the previous reload's loop hadn't finished yet, so a job could
+// end up with its early clips re-styled a dozen times and its later ones
+// never reached at all. Bounded to the same size as the job list itself.
+const STYLED_KEY = 'openshorts_auto_styled_jobs';
+
+export function loadAutoStyledJobs() {
+    try {
+        const raw = localStorage.getItem(STYLED_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+        return new Set();
+    }
+}
+
+export function markJobAutoStyled(id) {
+    try {
+        const set = loadAutoStyledJobs();
+        set.add(id);
+        localStorage.setItem(STYLED_KEY, JSON.stringify([...set].slice(-MAX_TRACKED)));
+    } catch {
+        // localStorage full/unavailable - worst case this job re-styles on
+        // the next reload, same as before this fix existed.
+    }
+}
+
 // Title for the job switcher: prefer a real filename/URL host, fall back to
 // a short id so there's always something to show.
 export function titleFor(jobId, data) {
