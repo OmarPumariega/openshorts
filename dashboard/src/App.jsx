@@ -20,6 +20,8 @@ import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 import { loadDefaultStyle, saveDefaultStyle, clearDefaultStyle } from './lib/subtitleStyle';
 import DefaultStyleEditor from './components/DefaultStyleEditor';
+import { loadJobList, saveJobList, titleFor } from './lib/jobList';
+import JobSwitcher from './components/JobSwitcher';
 
 // Simple TikTok icon sine Lucide might not have it or it varies
 const TikTokIcon = ({ size = 16, className = "" }) => (
@@ -61,8 +63,35 @@ function App() {
     else clearDefaultStyle();
   };
   // One auto-apply per job — a ref (not state) so it survives re-renders
-  // without retriggering the effect that reads it.
-  const autoStyledJobRef = useRef(null);
+  // without retriggering the effect that reads it. A Set, not a single id:
+  // the background job poller can complete several jobs independently of
+  // whichever one is focused, and each only gets auto-styled once.
+  const autoStyledJobRef = useRef(new Set());
+  // Every video this browser has started, tracked independently of which one
+  // is on screen — lets starting a new upload not lose one still processing.
+  // See lib/jobList.js. jobListRef mirrors the state for the background
+  // poller's setInterval closure, which would otherwise only ever see the
+  // list as it was when the interval was created.
+  const [jobList, setJobList] = useState(() => loadJobList());
+  const jobListRef = useRef(jobList);
+  useEffect(() => { jobListRef.current = jobList; }, [jobList]);
+  const upsertJob = (id, patch) => {
+    setJobList((prev) => {
+      const idx = prev.findIndex((j) => j.jobId === id);
+      const next = idx === -1
+        ? [{ jobId: id, startedAt: Date.now(), status: 'processing', ...patch }, ...prev]
+        : prev.map((j, i) => (i === idx ? { ...j, ...patch } : j));
+      saveJobList(next);
+      return next;
+    });
+  };
+  const removeJob = (id) => {
+    setJobList((prev) => {
+      const next = prev.filter((j) => j.jobId !== id);
+      saveJobList(next);
+      return next;
+    });
+  };
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
@@ -188,21 +217,27 @@ function App() {
     setActiveTab('dashboard');
   };
 
-  // Apply one subtitle style to every clip of the job, sequentially.
-  const handleBulkSubtitles = async (options) => {
-    const clips = results?.clips || [];
+  // Apply one subtitle style to every clip of a job, sequentially. Defaults to
+  // the focused job (the "apply this style to all clips" button inside the
+  // subtitle editor), but takes an explicit id/clips so the background job
+  // poller can auto-style a job that finished while it wasn't the one on
+  // screen — the progress indicator only lights up when that job IS the one
+  // being looked at, so background auto-styling stays invisible.
+  const handleBulkSubtitles = async (options, targetJobId = jobId, targetClips = results?.clips) => {
+    const clips = targetClips || [];
     const total = clips.length;
     if (!total) return;
-    setBulkSub({ running: true, current: 0, total, errors: 0 });
+    const isFocused = targetJobId === jobId;
+    if (isFocused) setBulkSub({ running: true, current: 0, total, errors: 0 });
     let errors = 0;
     for (let i = 0; i < total; i++) {
-      setBulkSub({ running: true, current: i + 1, total, errors });
+      if (isFocused) setBulkSub({ running: true, current: i + 1, total, errors });
       try {
         const res = await apiFetch('/api/subtitle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            job_id: jobId,
+            job_id: targetJobId,
             clip_index: i,
             position: options.position,
             font_size: options.fontSize,
@@ -226,11 +261,11 @@ function App() {
         errors++;
       }
     }
-    setBulkSub({ running: false, current: total, total, errors });
+    if (isFocused) setBulkSub({ running: false, current: total, total, errors });
     // Refresh results so each ResultCard picks up its new subtitled video_url.
     try {
-      const data = await pollJob(jobId);
-      if (data.result) setResults(data.result);
+      const data = await pollJob(targetJobId);
+      if (isFocused && data.result) setResults(data.result);
     } catch { /* keep current results */ }
   };
 
@@ -242,9 +277,9 @@ function App() {
   useEffect(() => {
     if (status !== 'complete' || !jobId || !defaultStyle) return;
     if (!results?.clips?.length) return;
-    if (autoStyledJobRef.current === jobId) return;
-    autoStyledJobRef.current = jobId;
-    handleBulkSubtitles(defaultStyle);
+    if (autoStyledJobRef.current.has(jobId)) return;
+    autoStyledJobRef.current.add(jobId);
+    handleBulkSubtitles(defaultStyle, jobId, results.clips);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, jobId, results, defaultStyle]);
 
@@ -349,38 +384,60 @@ function App() {
     return () => { cancelled = true; };
   }, [isManaged, jobId, results]);
 
+  // Unified poller: the focused job (fast path, drives the visible UI) plus
+  // every OTHER tracked job still marked processing (background — started,
+  // then left via "New Project" or the job switcher while it kept running).
+  // Always-on rather than gated on `status`, since there can be background
+  // work even when the focused view is idle. Background jobs read/write
+  // through jobListRef so this effect doesn't need to restart when the list
+  // changes — only jobId/status (the focused job) and defaultStyle do that.
   useEffect(() => {
-    let interval;
-    if ((status === 'processing' || status === 'completed') && jobId) {
-      interval = setInterval(async () => {
+    const tick = async () => {
+      if (jobId && status === 'processing') {
         try {
           const data = await pollJob(jobId);
-          console.log("Job status:", data);
-
-          // Update results if available (real-time)
-          if (data.result) {
-            setResults(data.result);
-          }
-
+          if (data.result) setResults(data.result);
           if (data.status === 'completed') {
             setStatus('complete');
-            clearInterval(interval);
+            upsertJob(jobId, { status: 'complete' });
           } else if (data.status === 'failed') {
             setStatus('error');
-            const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
-            clearInterval(interval);
-          } else {
-            // Update logs if available
-            if (data.logs) setLogs(data.logs);
+            const errorMsg = data.error || (data.logs?.length ? data.logs[data.logs.length - 1] : "Process failed");
+            setLogs((prev) => [...prev, "Error: " + errorMsg]);
+            upsertJob(jobId, { status: 'error' });
+          } else if (data.logs) {
+            setLogs(data.logs);
           }
         } catch (e) {
           console.error("Polling error", e);
         }
-      }, 2000);
-    }
+      }
+
+      const background = jobListRef.current.filter((j) => j.status === 'processing' && j.jobId !== jobId);
+      for (const j of background) {
+        try {
+          const data = await pollJob(j.jobId);
+          if (data.status === 'completed') {
+            upsertJob(j.jobId, { status: 'complete' });
+            // Same auto-apply the focused job's effect does below, just for
+            // a job nobody is currently looking at.
+            if (defaultStyle && data.result?.clips?.length && !autoStyledJobRef.current.has(j.jobId)) {
+              autoStyledJobRef.current.add(j.jobId);
+              handleBulkSubtitles(defaultStyle, j.jobId, data.result.clips);
+            }
+          } else if (data.status === 'failed') {
+            upsertJob(j.jobId, { status: 'error' });
+          }
+        } catch (e) {
+          console.error("Background polling error", j.jobId, e);
+        }
+      }
+    };
+
+    const interval = setInterval(tick, 2000);
     return () => clearInterval(interval);
-  }, [status, jobId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, jobId, defaultStyle]);
 
 
   // No BYOK in this fork: the only way this can be true is a server
@@ -425,7 +482,6 @@ function App() {
     setQualityGate(null);
     setProjectState(null);
     setNoSource(false);
-    autoStyledJobRef.current = null; // new job — allow the default style to auto-apply again
 
     try {
       let body;
@@ -478,6 +534,7 @@ function App() {
       }
 
       setJobId(resData.job_id);
+      upsertJob(resData.job_id, { title: titleFor(resData.job_id, data), startedAt: Date.now(), status: 'processing' });
 
     } catch (e) {
       if (e instanceof QuotaError) {
@@ -509,6 +566,32 @@ function App() {
     setProjectState(null);
     setNoSource(false);
     localStorage.removeItem(SESSION_KEY);
+  };
+
+  // Switch the main view to a different tracked job (JobSwitcher) — a
+  // background job the user started earlier and left running, or one that
+  // already finished. Always re-fetches fresh rather than trusting the
+  // switcher's cached status, since that's only updated on the 2s poll tick.
+  const focusJob = async (id) => {
+    if (id === jobId) return;
+    flushClipState();
+    setProjectState(null);
+    setNoSource(false);
+    setQualityGate(null);
+    try {
+      const data = await pollJob(id);
+      setJobId(id);
+      setResults(data.result || null);
+      setLogs(data.logs || []);
+      setStatus(data.status === 'completed' ? 'complete' : data.status === 'failed' ? 'error' : 'processing');
+      // The original upload (File object or pasted URL) isn't recoverable
+      // once we've navigated away from it — fall back to the source the
+      // backend itself served for this job, same as session-reload recovery.
+      setProcessingMedia({ type: 'server', payload: `/api/source/${id}` });
+      setActiveTab('dashboard');
+    } catch (e) {
+      alert(`Could not load that job: ${e.message}`);
+    }
   };
 
   // --- UI Components ---
@@ -596,7 +679,7 @@ function App() {
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
         <header className="h-14 border-b border-rule bg-paper flex items-center justify-between px-6 shrink-0 z-10">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {status !== 'idle' && (
               <button
                 onClick={handleReset}
@@ -606,6 +689,12 @@ function App() {
                 <span className="hidden sm:inline">New Project</span>
               </button>
             )}
+            <JobSwitcher
+              jobs={jobList}
+              activeJobId={jobId}
+              onFocus={focusJob}
+              onDismiss={removeJob}
+            />
           </div>
 
           <div className="flex items-center gap-4">
