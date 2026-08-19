@@ -13,13 +13,28 @@ COPY requirements.txt ./
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
 
 # GPU build (--build-arg GPU=1): user-space CUDA libs only — the NVIDIA
 # container runtime injects the driver. cuBLAS 12 + cuDNN 9 for CTranslate2
 # (faster-whisper CUDA), onnx-asr + onnxruntime-gpu for Parakeet. Adds ~2GB,
 # so the default CPU image stays slim.
 ARG GPU=0
+
+# torch/torchvision pull CUDA-bundled wheels from PyPI's default index even
+# on GPU=0 — ultralytics (YOLO) only needs the CPU op set here, so that's
+# several GB of unused NVIDIA libraries on a VPS with no GPU (this Dockerfile
+# targets a CPU-only 6vCPU/12GB box). Install the CPU-only build explicitly
+# for the default case; GPU=1 lets the normal index resolve the CUDA build.
+RUN if [ "$GPU" = "1" ]; then \
+      pip install --no-cache-dir torch==2.11.0 torchvision==0.26.0; \
+    else \
+      pip install --no-cache-dir torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu; \
+    fi
+
+# requirements.txt also pins torch/torchvision at the same versions — already
+# satisfied by the install above, so pip leaves them alone here.
+RUN pip install --no-cache-dir -r requirements.txt
+
 RUN if [ "$GPU" = "1" ]; then \
       pip install --no-cache-dir \
         "nvidia-cublas-cu12<13" "nvidia-cudnn-cu12>=9,<10" \
