@@ -94,14 +94,23 @@ async def _user_from_request(request: Request):
 
 
 async def resolve_gemini(request: Request) -> Optional[str]:
-    """Resolve the Gemini API key for a request.
+    """Resolve the LLM API key for a request.
 
     Private single-user fork: no BYOK, no cloud/managed keys. The key lives
-    only in the server's own environment (GEMINI_API_KEY in .env) and is
-    never accepted from the client, so it can never be read back out of a
-    request either. The ``request`` parameter is kept only for call-site
-    compatibility with the rest of the pipeline.
+    only in the server's own environment and is never accepted from the
+    client, so it can never be read back out of a request either. The
+    ``request`` parameter is kept only for call-site compatibility with the
+    rest of the pipeline.
+
+    Normally that's GEMINI_API_KEY (direct Gemini API, CLAUDE.md's default).
+    LLM_PROVIDER=openrouter is an explicitly opted-in alternative — see
+    llm_client.py — that routes the same calls through OpenRouter instead,
+    keyed on OPENROUTER_API_KEY. Whichever key comes back here is what gates
+    /api/process, /api/edit, /api/effects/generate, etc. and — for
+    /api/process only — gets forwarded into the pipeline subprocess's env.
     """
+    if os.environ.get("LLM_PROVIDER", "gemini").strip().lower() == "openrouter":
+        return os.environ.get("OPENROUTER_API_KEY")
     return os.environ.get("GEMINI_API_KEY")
 
 
@@ -1362,12 +1371,16 @@ async def health():
 
 @app.get("/api/config")
 async def get_config():
+    llm_provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
     return {
         "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
-        # Whether the server has a Gemini key configured — never the key itself.
-        # The frontend uses this to show a status indicator; there is no BYOK
-        # flow, so it never prompts the user to enter a key.
-        "geminiConfigured": bool(os.environ.get("GEMINI_API_KEY")),
+        # Whether the server has an LLM key configured for moment detection —
+        # never the key itself. The frontend uses this to show a status
+        # indicator; there is no BYOK flow, so it never prompts for a key.
+        "geminiConfigured": bool(os.environ.get(
+            "OPENROUTER_API_KEY" if llm_provider == "openrouter" else "GEMINI_API_KEY"
+        )),
+        "llmProvider": llm_provider,
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -1540,7 +1553,17 @@ async def process_endpoint(
     # Prepare Command
     cmd = ["python", "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
-    env["GEMINI_API_KEY"] = api_key # Override with key from request
+    # resolve_gemini() returns whichever provider's key is actually configured
+    # (GEMINI_API_KEY normally, OPENROUTER_API_KEY under LLM_PROVIDER=openrouter
+    # — see llm_client.py). Only stamp GEMINI_API_KEY here for the Gemini case:
+    # in OpenRouter mode OPENROUTER_API_KEY/LLM_PROVIDER are already inherited
+    # from this process's own env via os.environ.copy() above, and forcing a
+    # non-Gemini value into GEMINI_API_KEY would make layout_picker.py's/
+    # screencast_layout.py's own direct genai.Client() calls (unrelated,
+    # optional features, off by default) attempt a doomed API call instead of
+    # cleanly no-op'ing on a missing key.
+    if os.environ.get("LLM_PROVIDER", "gemini").strip().lower() != "openrouter":
+        env["GEMINI_API_KEY"] = api_key # Override with key from request
 
     # Optional layouts are per job. The renderer reads these at import time in
     # the subprocess, so they must be set before Popen — same path WATERMARK

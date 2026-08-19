@@ -134,9 +134,12 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     googleAuthEnabled: config.googleAuthEnabled,
-    // Whether the server has GEMINI_API_KEY set — there is no BYOK in this
+    // Whether the server has its LLM key set — there is no BYOK in this
     // fork, so the app only ever needs to know whether the admin configured it.
     geminiConfigured: !!config.geminiConfigured,
+    // "gemini" (default, GEMINI_API_KEY) or "openrouter" (OPENROUTER_API_KEY)
+    // — see llm_client.py. Only changes which env var name the UI points at.
+    llmProvider: config.llmProvider || 'gemini',
     loading,
     signingIn,
     user: me?.user || null,

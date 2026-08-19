@@ -23,6 +23,7 @@ from google.genai import types as genai_types
 
 import gemini_worker
 import layout_picker
+import llm_client
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
@@ -1249,12 +1250,13 @@ def get_viral_clips(transcript_result, video_duration):
     word boundaries so clips don't start/end mid-word.
     """
     print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
+    provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
+    required_key = "OPENROUTER_API_KEY" if provider == "openrouter" else "GEMINI_API_KEY"
+    if not os.getenv(required_key):
+        print(f"❌ Error: {required_key} not found in environment variables.")
         return None
 
-    client = genai.Client(api_key=api_key)
+    client = llm_client.get_client()
     model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     language = str(transcript_result.get('language') or 'unknown')
     print(f"\U0001f916  Model: {model_name} | language: {language}")

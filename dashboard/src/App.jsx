@@ -38,7 +38,8 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, geminiConfigured } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, geminiConfigured, llmProvider } = useAuth();
+  const envVarName = llmProvider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'GEMINI_API_KEY';
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -602,10 +603,10 @@ function App() {
               <button
                 onClick={() => setActiveTab('settings')}
                 className="badge-warn hover:brightness-125 transition-all"
-                title="Server has no Gemini API key configured"
+                title={`Server has no ${envVarName} configured`}
               >
                 <AlertTriangle size={12} />
-                <span className="hidden sm:inline">Gemini API key missing</span>
+                <span className="hidden sm:inline">{envVarName} missing</span>
                 <span className="sm:hidden">key missing</span>
               </button>
             )}
@@ -618,7 +619,7 @@ function App() {
             <div className="flex items-center gap-3 text-sm text-ink2">
               <KeyRound size={16} className="shrink-0 text-warn" />
               <div>
-                <span className="font-medium text-ink">GEMINI_API_KEY not set on the server.</span>{' '}
+                <span className="font-medium text-ink">{envVarName} not set on the server.</span>{' '}
                 <span className="text-muted">
                   Add it to the backend's .env and restart the server to use this app.
                 </span>
@@ -675,7 +676,9 @@ function App() {
                     <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
                       <KeyRound size={16} className="text-brass" />
                     </div>
-                    <h2 className="text-base font-medium text-ink lowercase">Gemini API key</h2>
+                    <h2 className="text-base font-medium text-ink lowercase">
+                      {llmProvider === 'openrouter' ? 'OpenRouter API key' : 'Gemini API key'}
+                    </h2>
                   </div>
                   {geminiConfigured
                     ? <span className="badge-ok"><Check size={12} /> configured</span>
@@ -683,11 +686,17 @@ function App() {
                 </div>
                 <p className="text-xs text-muted leading-relaxed">
                   {geminiConfigured
-                    ? <>The Gemini key lives in <code>GEMINI_API_KEY</code> on the server's <code>.env</code> — it is never
+                    ? <>The key lives in <code>{envVarName}</code> on the server's <code>.env</code> — it is never
                         sent to or stored in this browser.</>
-                    : <>No key configured on the server. Set <code>GEMINI_API_KEY</code> in the server's <code>.env</code>
+                    : <>No key configured on the server. Set <code>{envVarName}</code> in the server's <code>.env</code>
                         file and restart the backend — this app has no way to accept one from here.</>}
                 </p>
+                {llmProvider === 'openrouter' && (
+                  <p className="text-xs text-muted leading-relaxed mt-3 pt-3 border-t border-rule">
+                    Running via OpenRouter (moment detection only) — "auto edit" and "effects" upload the clip
+                    to Gemini's native video API directly and need a real <code>GEMINI_API_KEY</code> to work.
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -890,7 +899,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title="Gemini API Key Required"
+        title={`${envVarName} Required`}
         footer={
           <button
             onClick={() => setShowKeyModal(false)}
@@ -902,12 +911,14 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            This server has no <strong className="text-ink2">GEMINI_API_KEY</strong> configured — there is no way to
+            This server has no <strong className="text-ink2">{envVarName}</strong> configured — there is no way to
             set one from the browser. Add it to the backend's <code>.env</code> file and restart the server:
           </p>
           <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
-            <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a> and create a key</li>
-            <li>Set <code>GEMINI_API_KEY=&lt;your key&gt;</code> in the server's <code>.env</code></li>
+            <li>Go to {llmProvider === 'openrouter'
+              ? <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">openrouter.ai/keys</a>
+              : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a>} and create a key</li>
+            <li>Set <code>{envVarName}=&lt;your key&gt;</code> in the server's <code>.env</code></li>
             <li>Restart the backend container/process</li>
           </ol>
         </div>
