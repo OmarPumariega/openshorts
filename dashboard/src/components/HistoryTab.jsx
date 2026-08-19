@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, Download, Film, FolderOpen, Video, VideoOff, RefreshCw } from 'lucide-react';
+import { Loader2, Download, Film, FolderOpen, Video, VideoOff, RefreshCw, Pencil } from 'lucide-react';
 import { apiJson, apiFetch } from '../lib/api';
 import { getApiUrl } from '../config';
 
@@ -142,11 +142,11 @@ export default function HistoryTab({ onOpenProject }) {
                     onClick={() => handleOpen(project.job_id)}
                     disabled={!!opening}
                     className="btn-primary px-3 py-2 text-xs"
-                    title="Reopen this project in the Clip Generator"
+                    title="Reopen this project in the full Clip Generator editor — subtitles, reframe, hook, everything"
                   >
                     {opening === project.job_id
                       ? <><Loader2 size={14} className="animate-spin" /> opening…</>
-                      : <><FolderOpen size={14} /> open</>}
+                      : <><Pencil size={14} /> open to edit</>}
                   </button>
                 )}
               </div>
@@ -155,7 +155,7 @@ export default function HistoryTab({ onOpenProject }) {
             {project.clips.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 p-4">
                 {project.clips.map((clip) => (
-                  <div key={clip.index} className="rounded-input overflow-hidden border border-rule bg-paper">
+                  <div key={clip.index} className="rounded-input overflow-hidden border border-rule bg-paper group relative">
                     <div className="aspect-[9/16] bg-black">
                       {clip.video_url ? (
                         <video
@@ -168,6 +168,20 @@ export default function HistoryTab({ onOpenProject }) {
                         <div className="w-full h-full flex items-center justify-center text-muted">
                           <VideoOff size={20} />
                         </div>
+                      )}
+                      {/* Same target as the project-level "open to edit" button —
+                          a per-clip path into the editor for people who land on a
+                          clip first and don't notice the header button. Sits above
+                          the video but out of the way of its native play controls. */}
+                      {onOpenProject && (
+                        <button
+                          onClick={() => handleOpen(project.job_id)}
+                          disabled={!!opening}
+                          className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-paper/90 text-ink2 opacity-0 group-hover:opacity-100 hover:text-brass hover:bg-paper transition-all"
+                          title="Open this project to edit — subtitles, reframe, hook"
+                        >
+                          <Pencil size={12} />
+                        </button>
                       )}
                     </div>
                     <div className="p-2">
