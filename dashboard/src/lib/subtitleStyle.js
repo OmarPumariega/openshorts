@@ -15,6 +15,11 @@ export const FONT_OPTIONS = [
     { value: 'Helvetica', label: 'Helvetica' },
     { value: 'Georgia', label: 'Georgia' },
     { value: 'Courier New', label: 'Courier New' },
+    // Bundled directly (fonts/Inter-Bold.ttf, fonts/Montserrat-Bold.ttf) — not
+    // substituted via the fontmap like the system fonts above, since these are
+    // shipped as real font files under their own name.
+    { value: 'Inter', label: 'Inter' },
+    { value: 'Montserrat', label: 'Montserrat' },
 ];
 
 export const COLOR_PRESETS = [
