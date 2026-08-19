@@ -18,9 +18,8 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
-import {
-  CAPTION_PRESETS, presetToStyle, loadDefaultStyle, saveDefaultStyle, clearDefaultStyle,
-} from './lib/subtitleStyle';
+import { loadDefaultStyle, saveDefaultStyle, clearDefaultStyle } from './lib/subtitleStyle';
+import DefaultStyleEditor from './components/DefaultStyleEditor';
 
 // Simple TikTok icon sine Lucide might not have it or it varies
 const TikTokIcon = ({ size = 16, className = "" }) => (
@@ -743,29 +742,14 @@ function App() {
                 </div>
                 <p className="text-xs text-muted mb-4 leading-relaxed">
                   Applied automatically to every clip of every new video — no need to open the subtitle editor
-                  each time. Pick a look here, or open any clip's "subtitles" editor, customize it exactly how
-                  you want (font, colors, size), and hit "save as my default style" there instead.
+                  each time. Build your own look below (font, colors, size, everything), or start from a preset
+                  and tweak it.
                 </p>
-                <div className="grid grid-cols-3 gap-1.5 mb-3">
-                  {CAPTION_PRESETS.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => setDefaultStyle(presetToStyle(p))}
-                      className={`px-2 py-1.5 rounded-input border text-xs transition-colors flex items-center gap-1.5 justify-center
-                        ${defaultStyle?.presetId === p.id
-                          ? 'border-[color:var(--color-accent)] text-ink'
-                          : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
-                      title={p.label}
-                    >
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlightColor }} />
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
+                <DefaultStyleEditor value={defaultStyle} onChange={setDefaultStyle} />
                 {defaultStyle && (
                   <button
                     onClick={() => setDefaultStyle(null)}
-                    className="text-xs text-muted hover:text-ink transition-colors"
+                    className="mt-4 text-xs text-muted hover:text-ink transition-colors"
                   >
                     reset to factory default
                   </button>
