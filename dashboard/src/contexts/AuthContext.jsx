@@ -134,6 +134,9 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     googleAuthEnabled: config.googleAuthEnabled,
+    // Whether the server has GEMINI_API_KEY set — there is no BYOK in this
+    // fork, so the app only ever needs to know whether the admin configured it.
+    geminiConfigured: !!config.geminiConfigured,
     loading,
     signingIn,
     user: me?.user || null,

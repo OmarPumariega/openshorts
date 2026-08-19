@@ -1364,8 +1364,10 @@ async def health():
 async def get_config():
     return {
         "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
-        "billingEnabled": BILLING_ENABLED,
-        "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
+        # Whether the server has a Gemini key configured — never the key itself.
+        # The frontend uses this to show a status indicator; there is no BYOK
+        # flow, so it never prompts the user to enter a key.
+        "geminiConfigured": bool(os.environ.get("GEMINI_API_KEY")),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
