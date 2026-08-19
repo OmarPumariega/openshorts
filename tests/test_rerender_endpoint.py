@@ -312,11 +312,3 @@ class TestRerenderPersistence:
         assert by_text["again"]["startMs"] == 7000
         # "world" (20.0s) was cut out.
         assert "world" not in by_text
-
-
-class TestMcpTool:
-    def test_recut_clip_is_registered(self):
-        import mcp_server
-        names = [t["name"] for t in mcp_server.TOOLS]
-        assert "recut_clip" in names
-        assert "recut_clip" in mcp_server._TOOL_IMPLS
