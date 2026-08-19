@@ -249,10 +249,15 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                             screencasts with a webcam bubble, not talking-head footage.
                         </span>
                     </label>
-                    {screencastLayout && llmProvider === 'openrouter' && (
+                    {screencastLayout && !geminiConfigured && (
                         <p className="mt-2 ml-6 text-[11px] text-warn leading-relaxed">
-                            This needs a real <code>GEMINI_API_KEY</code> (uploads the video to Gemini directly) —
-                            it won't work over OpenRouter. {!geminiConfigured && 'None is configured on this server, so it will silently fall back to normal framing.'}
+                            No AI key is configured on this server, so this will silently fall back to normal framing.
+                        </p>
+                    )}
+                    {screencastLayout && geminiConfigured && llmProvider === 'openrouter' && (
+                        <p className="mt-2 ml-6 text-[11px] text-muted leading-relaxed">
+                            Over OpenRouter this samples frames instead of watching the full video, so detection is a
+                            little less precise than with a direct Gemini key — still catches most screen-share segments.
                         </p>
                     )}
                 </div>

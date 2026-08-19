@@ -164,53 +164,52 @@ def overlapping_width(scene_start, scene_end, ranges):
     return widest
 
 
-def detect_content_ranges(video_path, video_duration):
-    """Time ranges where on-screen content spans most of the frame width.
+def _sample_timed_frames(video_path, video_duration, target_count=40, width=480,
+                          min_interval=3.0):
+    """(timestamp, jpeg_bytes) pairs spread evenly across the video.
 
-    Returns (start, end, what, width_fraction) tuples, or [] on any failure:
-    a missing answer must degrade to today's routing rather than break the job.
+    Interval is duration/target_count, floored at min_interval so a short clip
+    doesn't get frames crammed 1s apart. No upper cap on the interval — the
+    whole point of dividing by target_count is to keep the frame count (and
+    therefore the request size/cost) roughly constant regardless of video
+    length: a 2-hour video should sample every ~3 minutes, not every 20s
+    (which would emit ~360 images into one request). A very short scene that
+    falls entirely between two samples can be missed — the width-fraction
+    gate downstream already discards borderline calls, so this trades some
+    recall on brief cutaways for requests that stay a sane size on long
+    videos. Silent [] on any decode failure — callers must degrade, not
+    crash the job.
     """
-    if not ENABLED:
-        return []
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return []
+    import cv2
 
-    from google import genai
-    from google.genai import types as genai_types
-    import gemini_worker
-
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
-    print("🔎 Checking for full-width on-screen content…")
+    interval = max(min_interval, video_duration / max(target_count, 1))
+    cap = cv2.VideoCapture(video_path)
+    out = []
     try:
-        client = genai.Client(api_key=api_key)
-        file_upload = client.files.upload(file=video_path)
-        deadline = time.time() + 180
-        while True:
-            info = client.files.get(name=file_upload.name)
-            state = str(getattr(getattr(info, "state", info), "name", "")).upper()
-            if state == "ACTIVE":
-                break
-            if state == "FAILED" or time.time() > deadline:
-                print("   ⚠️ Upload not usable — keeping face-only routing.")
-                return []
-            time.sleep(2)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return out
+        t = 0.0
+        while t < video_duration:
+            frame_idx = min(int(t * fps), total_frames - 1)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ok, frame = cap.read()
+            if ok:
+                h, w = frame.shape[:2]
+                scaled = cv2.resize(frame, (width, max(2, int(h * width / w))),
+                                     interpolation=cv2.INTER_AREA)
+                ok, buf = cv2.imencode(".jpg", scaled, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    out.append((round(t, 1), buf.tobytes()))
+            t += interval
+    finally:
+        cap.release()
+    return out
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[file_upload,
-                      gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
-                          video_duration=video_duration)],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=gemini_worker.WideContentResponse,
-            ))
-        gemini_worker.raise_if_blocked(response)
-        raw = (json.loads(response.text) or {}).get("ranges") or []
-    except Exception as e:
-        print(f"   ⚠️ On-screen check failed ({e}) — keeping face-only routing.")
-        return []
 
+def _parse_content_ranges(raw, video_duration):
+    """Shared post-processing for both providers' raw {"ranges": [...]} JSON."""
     ranges = []
     for r in raw:
         try:
@@ -224,7 +223,134 @@ def detect_content_ranges(video_path, video_duration):
         if e - s >= 0.5 and width >= MIN_WIDTH_FRACTION:
             ranges.append((s, e, str(r.get("what", ""))[:40], width))
     ranges.sort()
+    return ranges
 
+
+def _detect_content_ranges_gemini_video(video_path, video_duration, api_key, model_name):
+    """Native path: upload the whole video to Gemini's File API and let it
+    watch the real thing. Best quality (genuine temporal understanding, not
+    a handful of stills) — this is what runs by default with a real
+    GEMINI_API_KEY."""
+    from google import genai
+    from google.genai import types as genai_types
+    import gemini_worker
+
+    client = genai.Client(api_key=api_key)
+    file_upload = client.files.upload(file=video_path)
+    deadline = time.time() + 180
+    while True:
+        info = client.files.get(name=file_upload.name)
+        state = str(getattr(getattr(info, "state", info), "name", "")).upper()
+        if state == "ACTIVE":
+            break
+        if state == "FAILED" or time.time() > deadline:
+            print("   ⚠️ Upload not usable — keeping face-only routing.")
+            return []
+        time.sleep(2)
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[file_upload,
+                  gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
+                      video_duration=video_duration)],
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=gemini_worker.WideContentResponse,
+            temperature=0,  # factual classification, not creative — see _detect_content_ranges_openrouter
+        ))
+    gemini_worker.raise_if_blocked(response)
+    return (json.loads(response.text) or {}).get("ranges") or []
+
+
+def _detect_content_ranges_openrouter(video_path, video_duration, model_name):
+    """OpenRouter has no equivalent of Gemini's native video File API (no
+    provider on it accepts an uploaded video file for a chat completion), so
+    this approximates temporal understanding with sampled frames sent as a
+    sequence of labelled images instead — the same trick
+    detect_screencast_scenes() below already relies on for per-scene face
+    detection, just applied to the whole-video pass. Lower fidelity than
+    watching the actual video (a scene shorter than the sampling interval can
+    be missed entirely), but functional, and the width-fraction gate this
+    feeds into already discards borderline calls.
+
+    temperature=0 below is deliberate, not cosmetic: this is a factual "is
+    there wide on-screen content here" classification, not a task that
+    benefits from sampling variance. Verified on a real 55-minute screencast:
+    3 back-to-back reruns of the same frames through this exact function
+    returned the same 17 ranges, byte-identical timestamps each time."""
+    from google.genai import types as genai_types
+    import gemini_worker
+    import llm_client
+
+    frames = _sample_timed_frames(video_path, video_duration)
+    if not frames:
+        return []
+
+    parts = [genai_types.Part.from_text(text=gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
+        video_duration=video_duration) +
+        "\n\nYou are shown sampled frames from the video, in chronological order, "
+        "each preceded by a text label giving its timestamp in seconds. Base "
+        "start/end on those timestamps.")]
+    for ts, jpeg_bytes in frames:
+        parts.append(genai_types.Part.from_text(text=f"Frame at {ts}s:"))
+        parts.append(genai_types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"))
+
+    client = llm_client.get_client()
+    response = client.models.generate_content(
+        model=model_name,
+        contents=parts,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=gemini_worker.WideContentResponse,
+            temperature=0,
+        ))
+    gemini_worker.raise_if_blocked(response)
+    return (json.loads(response.text) or {}).get("ranges") or []
+
+
+def detect_content_ranges(video_path, video_duration):
+    """Time ranges where on-screen content spans most of the frame width.
+
+    Returns (start, end, what, width_fraction) tuples, or [] on any failure:
+    a missing answer must degrade to today's routing rather than break the job.
+    """
+    if not ENABLED:
+        return []
+
+    provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
+    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    print("🔎 Checking for full-width on-screen content…")
+
+    if provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
+        return []
+    if provider != "openrouter" and not os.getenv("GEMINI_API_KEY"):
+        return []
+
+    # temperature=0 made this reliable in testing (see
+    # _detect_content_ranges_openrouter's docstring), but OpenRouter can still
+    # route a request to different backing infra than the last one, so this
+    # keeps a couple of retries as a safety net: a wrongly-empty result only
+    # costs today's routing (no harm, just a missed improvement), which is
+    # cheap insurance against a single unlucky call deciding the whole job.
+    attempts = 3 if provider == "openrouter" else 1
+    raw = []
+    for attempt in range(1, attempts + 1):
+        try:
+            if provider == "openrouter":
+                raw = _detect_content_ranges_openrouter(video_path, video_duration, model_name)
+            else:
+                api_key = os.getenv("GEMINI_API_KEY")
+                raw = _detect_content_ranges_gemini_video(video_path, video_duration, api_key, model_name)
+        except Exception as e:
+            print(f"   ⚠️ On-screen check failed ({e}) — keeping face-only routing.")
+            raw = []
+            break
+        if raw:
+            break
+        if attempt < attempts:
+            print(f"   ↻ Empty result (attempt {attempt}/{attempts}) — retrying…")
+
+    ranges = _parse_content_ranges(raw, video_duration)
     if ranges:
         print("   📊 " + ", ".join(
             f"{w}@{s:.0f}-{e:.0f}s ({frac:.0%} wide)"

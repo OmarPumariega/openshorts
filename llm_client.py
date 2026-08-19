@@ -14,16 +14,23 @@ gemini_worker.py's response helpers (raise_if_blocked, _get_response_text,
 _calculate_cost_analysis — all duck-typed via getattr) work unmodified
 against either provider's response.
 
-Scope: only the plain-text prompt path used by main.py's get_viral_clips
-(the primary, always-on moment-detection pipeline) is covered end to end.
-layout_picker.py and screencast_layout.py construct their own genai.Client
-directly for their (optional, off-by-default) frame-based multimodal calls,
-and main.py's get_visual_clips silent-video fallback uses Gemini's native
-File API — neither has an OpenRouter path, and both already degrade
+Scope: main.py's get_viral_clips (the primary, always-on moment-detection
+pipeline, text-only) and screencast_layout.py's detect_content_ranges
+(frame-sampled images, see that module for why frames instead of a native
+video upload) both go through get_client() and work on either provider.
+_build_message_content() converts genai Part objects with inline image
+bytes into OpenAI-style image_url content blocks for the OpenRouter path;
+plain-text `contents` (the common case) stays a plain string.
+
+layout_picker.py's own frame-based layout picker (SPLIT/SCREENCAST framing
+choice, distinct from screencast_layout.py's content detection) and
+main.py's get_visual_clips silent-video fallback still construct their own
+genai.Client() directly and remain Gemini-only — both already degrade
 gracefully (return "none"/None) rather than crash when GEMINI_API_KEY is
-absent, so running in OpenRouter-only mode just means those specific
+absent, so running in OpenRouter-only mode just means those two specific
 edge-case features sit idle instead of erroring.
 """
+import base64
 import json
 import os
 from types import SimpleNamespace
@@ -68,17 +75,39 @@ def _strip_unsupported_schema_keys(node):
             _strip_unsupported_schema_keys(v)
 
 
-def _content_to_text(contents) -> str:
-    """gemini_worker.py's callers only ever pass a plain string. Defensively
-    flatten anything else (e.g. a stray Part list) to its text pieces rather
-    than crashing — multimodal parts (images) aren't supported by this shim."""
+def _build_message_content(contents):
+    """Turn a genai-style `contents` argument into an OpenAI-style message
+    `content` value: a plain string for text-only calls (main.py's
+    get_viral_clips — the common case), or a list of text/image_url parts
+    when the caller passes genai Part objects with inline image bytes
+    (screencast_layout.py's frame-sampling path — see its own module
+    docstring for why frames instead of a native video upload).
+    """
     if isinstance(contents, str):
         return contents
-    parts = []
-    for item in contents if isinstance(contents, (list, tuple)) else [contents]:
+
+    items = contents if isinstance(contents, (list, tuple)) else [contents]
+    has_image = any(getattr(item, "inline_data", None) is not None for item in items)
+    if not has_image:
+        # Text-only list (e.g. [prompt]) — same flattening as before, just
+        # renamed now that this function also handles the multimodal case.
+        parts = [getattr(item, "text", None) or str(item) for item in items]
+        return "\n".join(parts)
+
+    content = []
+    for item in items:
+        inline = getattr(item, "inline_data", None)
+        if inline is not None:
+            b64 = base64.b64encode(inline.data).decode("ascii")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{inline.mime_type};base64,{b64}"},
+            })
+            continue
         text = getattr(item, "text", None)
-        parts.append(text if text is not None else str(item))
-    return "\n".join(parts)
+        if text:
+            content.append({"type": "text", "text": text})
+    return content
 
 
 class _Models:
@@ -97,7 +126,7 @@ class _OpenRouterClient:
     def _generate(self, model, contents, config):
         body = {
             "model": _to_openrouter_model(model),
-            "messages": [{"role": "user", "content": _content_to_text(contents)}],
+            "messages": [{"role": "user", "content": _build_message_content(contents)}],
         }
 
         schema_cls = getattr(config, "response_schema", None) if config is not None else None
@@ -117,6 +146,10 @@ class _OpenRouterClient:
                 body["reasoning"] = {"max_tokens": int(budget)}
             elif level:
                 body["reasoning"] = {"effort": level}
+
+        temperature = getattr(config, "temperature", None) if config is not None else None
+        if temperature is not None:
+            body["temperature"] = temperature
 
         resp = httpx.post(
             OPENROUTER_URL,
