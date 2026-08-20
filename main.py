@@ -819,15 +819,15 @@ def render_rotate_to_landscape(input_video, final_output_video):
     so there's no separate crop or pad step: the rotation alone produces the
     right container shape.
 
-    transpose=2 (90° counter-clockwise). Whichever direction is "wrong" is a
-    one-line fix (transpose=1 for clockwise instead) — there's no functional
-    difference, just which way the viewer's wrist turns.
+    transpose=1 (90° clockwise — flipped from the original transpose=2 per
+    user feedback: the first cut had it rotated the wrong way, and clockwise
+    is the "totally opposite" direction they asked for).
     """
     if os.path.exists(final_output_video):
         os.remove(final_output_video)
     print(f"🎬 Rotate to landscape (9:16 file, sideways content): {input_video}")
     cmd = [
-        'ffmpeg', '-y', '-i', input_video, '-vf', 'transpose=2',
+        'ffmpeg', '-y', '-i', input_video, '-vf', 'transpose=1',
         *video_encode_args(QUALITY_FAST), *audio_encode_args(),
         final_output_video,
     ]
