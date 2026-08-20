@@ -30,6 +30,10 @@ const TikTokIcon = ({ size = 16, className = "" }) => (
   </svg>
 );
 
+// Spanish labels for the internal status values (kept in English internally
+// since they drive logic/CSS class names throughout the file).
+const STATUS_LABELS = { idle: 'INACTIVO', processing: 'PROCESANDO', complete: 'COMPLETO', error: 'ERROR' };
+
 const SESSION_KEY = 'openshorts_session';
 const SESSION_MAX_AGE = 3600000; // 1 hour (matches server job retention)
 
@@ -218,7 +222,7 @@ function App() {
     setNoSource(true);
     setJobId(data.job_id);
     setResults(data.result || null);
-    setLogs(['♻️ Project restored from your library.']);
+    setLogs(['♻️ Proyecto restaurado desde tu biblioteca.']);
     setProcessingMedia(null);
     setQualityGate(null);
     setStatus('complete');
@@ -321,7 +325,7 @@ function App() {
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      alert(`Download failed: ${e.message}`);
+      alert(`Error al descargar: ${e.message}`);
     } finally {
       setDownloadingAll(false);
     }
@@ -424,7 +428,7 @@ function App() {
             upsertJob(jobId, { status: 'complete' });
           } else if (data.status === 'failed') {
             setStatus('error');
-            const errorMsg = data.error || (data.logs?.length ? data.logs[data.logs.length - 1] : "Process failed");
+            const errorMsg = data.error || (data.logs?.length ? data.logs[data.logs.length - 1] : "El proceso ha fallado");
             setLogs((prev) => [...prev, "Error: " + errorMsg]);
             upsertJob(jobId, { status: 'error' });
           } else if (data.logs) {
@@ -501,7 +505,7 @@ function App() {
       return;
     }
     setStatus('processing');
-    setLogs(["Starting process..."]);
+    setLogs(["Iniciando proceso..."]);
     setResults(null);
     setProcessingMedia(data);
     setQualityGate(null);
@@ -575,7 +579,7 @@ function App() {
         return;
       }
       setStatus('error');
-      setLogs(l => [...l, `Error starting job: ${e.message}`]);
+      setLogs(l => [...l, `Error al iniciar el trabajo: ${e.message}`]);
     }
   };
 
@@ -615,7 +619,7 @@ function App() {
       setProcessingMedia({ type: 'server', payload: `/api/source/${id}` });
       setActiveTab('dashboard');
     } catch (e) {
-      alert(`Could not load that job: ${e.message}`);
+      alert(`No se pudo cargar ese trabajo: ${e.message}`);
     }
   };
 
@@ -635,7 +639,7 @@ function App() {
                 className="btn-quiet px-3 py-1.5 text-xs"
               >
                 <Plus size={14} />
-                <span className="hidden sm:inline">New Project</span>
+                <span className="hidden sm:inline">Nuevo proyecto</span>
               </button>
             )}
             <JobSwitcher
@@ -659,13 +663,13 @@ function App() {
             {billingEnabled && isSignedIn && !isManaged && (
               <button onClick={() => setShowPlanChoice(true)}
                 className="btn-primary px-4 py-2 text-xs">
-                Choose a plan
+                Elegir un plan
               </button>
             )}
             {billingEnabled && !isSignedIn && (
               <button onClick={() => setShowLogin(true)}
                 className="btn-ghost px-4 py-2 text-xs">
-                Sign in
+                Iniciar sesión
               </button>
             )}
             {billingEnabled && isSignedIn && <ProfileMenu />}
@@ -674,11 +678,11 @@ function App() {
               <button
                 onClick={() => setActiveTab('settings')}
                 className="badge-warn hover:brightness-125 transition-all"
-                title={`Server has no ${envVarName} configured`}
+                title={`El servidor no tiene ${envVarName} configurada`}
               >
                 <AlertTriangle size={12} />
-                <span className="hidden sm:inline">{envVarName} missing</span>
-                <span className="sm:hidden">key missing</span>
+                <span className="hidden sm:inline">falta {envVarName}</span>
+                <span className="sm:hidden">falta la clave</span>
               </button>
             )}
           </div>
@@ -690,9 +694,9 @@ function App() {
             <div className="flex items-center gap-3 text-sm text-ink2">
               <KeyRound size={16} className="shrink-0 text-warn" />
               <div>
-                <span className="font-medium text-ink">{envVarName} not set on the server.</span>{' '}
+                <span className="font-medium text-ink">{envVarName} no está configurada en el servidor.</span>{' '}
                 <span className="text-muted">
-                  Add it to the backend's .env and restart the server to use this app.
+                  Añádela al .env del backend y reinicia el servidor para usar esta app.
                 </span>
               </div>
             </div>
@@ -700,7 +704,7 @@ function App() {
               onClick={() => setActiveTab('settings')}
               className="btn-quiet px-3 py-1.5 text-xs shrink-0"
             >
-              Details
+              Detalles
             </button>
           </div>
         )}
@@ -710,8 +714,8 @@ function App() {
           <div className="mx-6 mt-2 px-4 py-3 bg-paper2 border border-rule rounded-card flex items-center justify-between animate-fade shrink-0">
             <div className="flex items-center gap-2 text-sm text-ink2">
               <RotateCcw size={16} className="text-brass" />
-              <span className="font-medium">Session recovered</span>
-              <span className="text-muted text-xs">Your previous work has been restored.</span>
+              <span className="font-medium">Sesión recuperada</span>
+              <span className="text-muted text-xs">Se ha restaurado tu trabajo anterior.</span>
             </div>
             <button onClick={() => setSessionRecovered(false)} className="text-muted hover:text-ink transition-colors">
               <X size={14} />
@@ -733,11 +737,11 @@ function App() {
             <div className="h-full overflow-y-auto p-4 sm:p-8 max-w-2xl mx-auto animate-fade">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
                 <div>
-                  <p className="eyebrow mb-1.5">02 · SETTINGS</p>
-                  <h1 className="font-display lowercase text-2xl text-ink">Settings</h1>
+                  <p className="eyebrow mb-1.5">02 · AJUSTES</p>
+                  <h1 className="font-display lowercase text-2xl text-ink">Ajustes</h1>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted mt-1">
-                  <Shield size={12} className="text-ok shrink-0" /> Private, single-user instance
+                  <Shield size={12} className="text-ok shrink-0" /> Instancia privada, de un solo usuario
                 </div>
               </div>
 
@@ -748,24 +752,26 @@ function App() {
                       <KeyRound size={16} className="text-brass" />
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">
-                      {llmProvider === 'openrouter' ? 'OpenRouter API key' : 'Gemini API key'}
+                      {llmProvider === 'openrouter' ? 'Clave API de OpenRouter' : 'Clave API de Gemini'}
                     </h2>
                   </div>
                   {geminiConfigured
-                    ? <span className="badge-ok"><Check size={12} /> configured</span>
-                    : <span className="badge-warn"><AlertTriangle size={12} /> not set</span>}
+                    ? <span className="badge-ok"><Check size={12} /> configurada</span>
+                    : <span className="badge-warn"><AlertTriangle size={12} /> no configurada</span>}
                 </div>
                 <p className="text-xs text-muted leading-relaxed">
                   {geminiConfigured
-                    ? <>The key lives in <code>{envVarName}</code> on the server's <code>.env</code> — it is never
-                        sent to or stored in this browser.</>
-                    : <>No key configured on the server. Set <code>{envVarName}</code> in the server's <code>.env</code>
-                        file and restart the backend — this app has no way to accept one from here.</>}
+                    ? <>La clave vive en <code>{envVarName}</code>, en el <code>.env</code> del servidor — nunca
+                        se envía ni se guarda en este navegador.</>
+                    : <>No hay ninguna clave configurada en el servidor. Define <code>{envVarName}</code> en el
+                        <code>.env</code> del servidor y reinicia el backend — esta app no tiene forma de
+                        aceptar una clave desde aquí.</>}
                 </p>
                 {llmProvider === 'openrouter' && (
                   <p className="text-xs text-muted leading-relaxed mt-3 pt-3 border-t border-rule">
-                    Running via OpenRouter (moment detection only) — "auto edit" and "effects" upload the clip
-                    to Gemini's native video API directly and need a real <code>GEMINI_API_KEY</code> to work.
+                    Funcionando vía OpenRouter (solo detección de momentos) — "auto edit" y "efectos" suben el
+                    clip directamente a la API de vídeo nativa de Gemini y necesitan una <code>GEMINI_API_KEY</code>
+                    real para funcionar.
                   </p>
                 )}
               </div>
@@ -776,16 +782,16 @@ function App() {
                     <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
                       <Type size={16} className="text-brass" />
                     </div>
-                    <h2 className="text-base font-medium text-ink lowercase">Default subtitle style</h2>
+                    <h2 className="text-base font-medium text-ink lowercase">Estilo de subtítulos por defecto</h2>
                   </div>
                   {defaultStyle
-                    ? <span className="badge-ok"><Check size={12} /> set</span>
-                    : <span className="readout">factory default</span>}
+                    ? <span className="badge-ok"><Check size={12} /> configurado</span>
+                    : <span className="readout">valor de fábrica</span>}
                 </div>
                 <p className="text-xs text-muted mb-4 leading-relaxed">
-                  Applied automatically to every clip of every new video — no need to open the subtitle editor
-                  each time. Build your own look below (font, colors, size, everything), or start from a preset
-                  and tweak it.
+                  Se aplica automáticamente a todos los clips de cada vídeo nuevo — sin tener que abrir el editor
+                  de subtítulos cada vez. Crea tu propio estilo abajo (fuente, colores, tamaño, todo), o parte de
+                  un preset y ajústalo a tu gusto.
                 </p>
                 <DefaultStyleEditor value={defaultStyle} onChange={setDefaultStyle} />
                 {defaultStyle && (
@@ -793,7 +799,7 @@ function App() {
                     onClick={() => setDefaultStyle(null)}
                     className="mt-4 text-xs text-muted hover:text-ink transition-colors"
                   >
-                    reset to factory default
+                    restablecer al valor de fábrica
                   </button>
                 )}
               </div>
@@ -820,12 +826,12 @@ function App() {
               <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 sm:p-6">
               <div className="max-w-xl w-full text-center space-y-8">
                 <div className="space-y-4">
-                  <p className="eyebrow">01 · CLIP GENERATOR</p>
+                  <p className="eyebrow">01 · GENERADOR DE CLIPS</p>
                   <h1 className="font-display lowercase text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+                    Crea shorts virales
                   </h1>
                   <p className="text-muted text-lg">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                    Suelta tu vídeo largo abajo para generar al instante clips virales con IA.
                   </p>
                 </div>
 
@@ -850,13 +856,13 @@ function App() {
                 <div className="mb-6 flex items-center justify-between">
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
-                    Live Analysis
+                    Análisis en vivo
                   </h2>
                   <span className={status === 'processing' ? 'badge-brass' :
                     status === 'complete' ? 'badge-ok' :
                       'badge-danger'
                     }>
-                    {status.toUpperCase()}
+                    {STATUS_LABELS[status] || status.toUpperCase()}
                   </span>
                 </div>
 
@@ -874,7 +880,7 @@ function App() {
                 {/* The wait is dead time — the best moment to ask for a star. */}
                 {status === 'processing' && (
                   <div className="my-3">
-                    <StarBanner message="Free while it renders?" />
+                    <StarBanner message="¿Gratis mientras se genera?" />
                   </div>
                 )}
 
@@ -882,7 +888,7 @@ function App() {
                 <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
                   <div className="px-4 py-2 border-b border-rule flex items-center justify-between bg-paper2 shrink-0">
                     <span className="readout flex items-center gap-2">
-                      <Terminal size={12} /> System Logs
+                      <Terminal size={12} /> Registro del sistema
                     </span>
                     <button onClick={() => setLogsVisible(!logsVisible)} className="text-muted hover:text-ink transition-colors">
                       {logsVisible ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />}
@@ -907,10 +913,10 @@ function App() {
               {/* Right Panel: Results Grid */}
               <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-4 sm:p-6 transition-all duration-700 ease-in-out`}>
                 <h2 className="font-display lowercase text-xl text-ink mb-6 flex flex-wrap items-center gap-2 shrink-0">
-                  Generated Shorts
+                  Shorts generados
                   {results?.clips?.length > 0 && (
                     <span className="readout bg-paper3 px-2.5 py-1 rounded-full ml-auto">
-                      {results.clips.length} Clips
+                      {results.clips.length} clips
                     </span>
                   )}
                   {results?.cost_analysis && !isManaged && (
@@ -924,11 +930,11 @@ function App() {
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
                         className="btn-ghost px-3 py-2 text-xs"
-                        title="Download all clips as a ZIP"
+                        title="Descargar todos los clips como ZIP"
                       >
                         {downloadingAll
-                          ? <><Loader2 size={14} className="animate-spin" />zipping…</>
-                          : <><Download size={14} />download all</>}
+                          ? <><Loader2 size={14} className="animate-spin" />comprimiendo…</>
+                          : <><Download size={14} />descargar todo</>}
                       </button>
                     </div>
                   )}
@@ -943,12 +949,12 @@ function App() {
                         onClick={() => { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }}
                         className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
                       >
-                        <span className="text-ink">Like these clips?</span>{' '}
-                        <span className="text-muted">They carry a watermark and delete in 7 days.</span>{' '}
-                        <span className="text-brass font-medium">Keep them forever →</span>
+                        <span className="text-ink">¿Te gustan estos clips?</span>{' '}
+                        <span className="text-muted">Llevan marca de agua y se eliminan en 7 días.</span>{' '}
+                        <span className="text-brass font-medium">Consérvalos para siempre →</span>
                       </button>
                     )}
-                    <StarBanner message="Happy with your clips?" />
+                    <StarBanner message="¿Contento con tus clips?" />
                   </div>
                 )}
 
@@ -979,11 +985,11 @@ function App() {
                     status === 'processing' ? (
                       <div className="h-full flex flex-col items-center justify-center text-muted space-y-4">
                         <Loader2 size={32} className="animate-spin text-brass" />
-                        <p className="text-sm lowercase">Waiting for clips...</p>
+                        <p className="text-sm lowercase">Esperando los clips...</p>
                       </div>
                     ) : status === 'error' ? (
                       <div className="h-full flex flex-col items-center justify-center text-danger space-y-2">
-                        <p>Generation failed.</p>
+                        <p>Ha fallado la generación.</p>
                       </div>
                     ) : null
                   )}
@@ -1001,52 +1007,52 @@ function App() {
       <Modal
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
-        eyebrow="SETUP"
-        title={`${envVarName} Required`}
+        eyebrow="CONFIGURACIÓN"
+        title={`Falta ${envVarName}`}
         footer={
           <button
             onClick={() => setShowKeyModal(false)}
             className="btn-primary w-full px-4 py-2 text-sm"
           >
-            Close
+            Cerrar
           </button>
         }
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            This server has no <strong className="text-ink2">{envVarName}</strong> configured — there is no way to
-            set one from the browser. Add it to the backend's <code>.env</code> file and restart the server:
+            Este servidor no tiene <strong className="text-ink2">{envVarName}</strong> configurada — no hay forma de
+            establecerla desde el navegador. Añádela al archivo <code>.env</code> del backend y reinicia el servidor:
           </p>
           <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
-            <li>Go to {llmProvider === 'openrouter'
+            <li>Ve a {llmProvider === 'openrouter'
               ? <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">openrouter.ai/keys</a>
-              : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a>} and create a key</li>
-            <li>Set <code>{envVarName}=&lt;your key&gt;</code> in the server's <code>.env</code></li>
-            <li>Restart the backend container/process</li>
+              : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a>} y crea una clave</li>
+            <li>Define <code>{envVarName}=&lt;tu_clave&gt;</code> en el <code>.env</code> del servidor</li>
+            <li>Reinicia el contenedor o proceso del backend</li>
           </ol>
         </div>
       </Modal>
 
       {/* Pre-flight quality gate */}
       {qualityGate && (
-        <Modal isOpen={true} onClose={() => setQualityGate(null)} size="md" eyebrow="HEADS UP" title="low source quality">
+        <Modal isOpen={true} onClose={() => setQualityGate(null)} size="md" eyebrow="ATENCIÓN" title="calidad de origen baja">
           <div className="space-y-4">
             <p className="text-sm text-ink2">
-              YouTube only offers <span className="text-brass font-semibold">{qualityGate.info.max_height}p</span> for this video
-              (below the {qualityGate.info.min_height}p we recommend). Processing anyway will produce lower-quality clips.
+              YouTube solo ofrece <span className="text-brass font-semibold">{qualityGate.info.max_height}p</span> para este vídeo
+              (por debajo de los {qualityGate.info.min_height}p recomendados). Procesarlo igualmente producirá clips de menor calidad.
             </p>
             {qualityGate.info.cookies_invalid && (
               <p className="text-xs text-muted">
-                Your YouTube cookies look expired — refreshing them (export again from an incognito window) often unlocks HD.
+                Tus cookies de YouTube parecen haber caducado — renovarlas (exportarlas de nuevo desde una ventana de incógnito) suele desbloquear HD.
               </p>
             )}
             <div className="flex gap-2 justify-end pt-2">
-              <button onClick={() => setQualityGate(null)} className="btn-ghost">cancel</button>
+              <button onClick={() => setQualityGate(null)} className="btn-ghost">cancelar</button>
               <button
                 onClick={() => { const d = qualityGate.data; setQualityGate(null); handleProcess(d, true); }}
                 className="btn-primary"
               >
-                process anyway
+                procesar de todas formas
               </button>
             </div>
           </div>
@@ -1103,12 +1109,12 @@ function App() {
 // see CLAUDE.md) — swap in your own logo/name where noted below.
 function Sidebar({ activeTab, setActiveTab }) {
   const navItems = [
-    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator' },
+    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Generador de clips' },
     // Single-user self-host fork: history is just a live scan of OUTPUT_DIR
     // (see GET /api/history), so it's always available — no sign-in/plan
     // gate to check, unlike upstream's cloud-only library.
-    { id: 'history', ord: '02', icon: History, label: 'History' },
-    { id: 'settings', ord: '03', icon: Settings, label: 'Settings' },
+    { id: 'history', ord: '02', icon: History, label: 'Historial' },
+    { id: 'settings', ord: '03', icon: Settings, label: 'Ajustes' },
   ];
 
   return (
@@ -1118,7 +1124,7 @@ function Sidebar({ activeTab, setActiveTab }) {
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 border border-rule">
           <Film size={16} className="text-brass" />
         </div>
-        <span className="font-display lowercase text-lg text-ink hidden lg:block">clip studio</span>
+        <span className="font-display lowercase text-lg text-ink hidden lg:block">estudio de clips</span>
       </div>
 
       <nav className="flex-1 px-4 py-4 space-y-1">

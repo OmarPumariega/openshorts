@@ -226,49 +226,70 @@ def detect(video_path, samples=10):
 
 MAX_CAMERA_RATIO = 0.40
 
+# Default camera-band height as a fraction of the output frame, BEFORE the
+# upscale cap below can shrink it further. Independent of the detected box's
+# own aspect on purpose — see the "stretched full width" note below.
+TARGET_CAM_HEIGHT_RATIO = 0.22
+
+# How far a native inset crop may be blown up before it stops reading as a
+# person and starts reading as a blur. This webcam bubble is commonly under
+# 200px square (BlazeFace/YOLO see it from across a 1080p+ desktop capture),
+# and a 1080px-wide vertical output stretched that to fill its FULL WIDTH —
+# a 6x+ upscale — before this cap existed: real clip, real bug, see the
+# module's own test render before this constant was added.
+MAX_INSET_UPSCALE = 3.0
+
 
 def inset_filtergraph(orig_w, orig_h, out_w, out_h, box, camera_ratio=None):
-    """Screen on top at full width, the webcam inset below.
+    """Screen on top at full width, the webcam inset centred below it.
 
     The screen keeps its whole width, which is the point: a game HUD or a
-    desktop puts what matters at the edges. The inset is scaled up so the person
-    reads at a size the source never gave them.
+    desktop puts what matters at the edges.
 
-    The camera band takes its height from the INSET'S OWN aspect ratio rather
-    than a fixed share of the frame. A fixed share was tried first and stretched
-    every face sideways: a 16:9 inset forced into a 2:1 band is a 12% horizontal
-    stretch, and it is immediately visible on a face.
+    The camera band's SIZE follows a fixed target height and the box's OWN
+    aspect ratio — not the output width. Forcing a small, often near-square
+    or circular webcam bubble to span the full 1080px+ width of a vertical
+    frame was tried first: a 168x168 bubble stretched edge to edge came out
+    roughly 40% of the total frame height and visibly blurred (a 6x+
+    upscale of ~170 native pixels). Sizing the band from the box's own
+    aspect and centring it (blurred backdrop fills the sides, same as the
+    top/bottom filler) keeps the person a size the source can actually
+    support, and MAX_INSET_UPSCALE below caps how far even that is allowed
+    to stretch.
     """
     box_w = max(2, box[2])
     box_h = max(2, box[3])
 
-    if camera_ratio is not None:
-        cam_h = int(out_h * camera_ratio)
-    else:
-        cam_h = int(round(out_w * box_h / float(box_w)))
+    cam_h = int(out_h * (camera_ratio if camera_ratio is not None
+                          else TARGET_CAM_HEIGHT_RATIO))
     cam_h = min(cam_h, int(out_h * MAX_CAMERA_RATIO))
+    cam_w = int(round(cam_h * box_w / float(box_h)))
+    if cam_w > out_w:
+        # Re-derive from the width clamp so the band still matches the box's
+        # aspect exactly — otherwise the scale below would stretch it.
+        cam_w = out_w
+        cam_h = int(round(cam_w * box_h / float(box_w)))
+
+    upscale = max(cam_w / float(box_w), cam_h / float(box_h))
+    if upscale > MAX_INSET_UPSCALE:
+        shrink = MAX_INSET_UPSCALE / upscale
+        cam_h = max(2, int(cam_h * shrink))
+        cam_w = max(2, int(cam_w * shrink))
+
     cam_h -= cam_h % 2
+    cam_w -= cam_w % 2
+    cam_x = (out_w - cam_w) // 2
 
     screen_h = int(round(out_w * orig_h / float(orig_w)))
     screen_h -= screen_h % 2
     screen_h = max(2, min(screen_h, out_h - cam_h - 2))
 
-    # Widen (or heighten) the crop to the band's aspect so the scale below is
-    # uniform. Clamped to the frame, so an inset hard against an edge simply
-    # keeps whatever it can reach.
-    target_aspect = out_w / float(cam_h)
+    # The crop is the box as detected (already padded to the inset's real
+    # edges by inset_box()) — no further widening needed, since the band
+    # above was sized FROM this box's aspect rather than the reverse.
     x, y, w, h = box
-    if w / float(h) < target_aspect:
-        want_w = min(orig_w, int(round(h * target_aspect)))
-        x = int(round(x + w / 2.0 - want_w / 2.0))
-        w = want_w
-    else:
-        want_h = min(orig_h, int(round(w / target_aspect)))
-        y = int(round(y + h / 2.0 - want_h / 2.0))
-        h = want_h
     x = max(0, min(x, orig_w - w))
     y = max(0, min(y, orig_h - h))
-
     w -= w % 2
     h -= h % 2
     x -= x % 2
@@ -284,8 +305,8 @@ def inset_filtergraph(orig_w, orig_h, out_w, out_h, box, camera_ratio=None):
         f"[bga]scale=-2:{out_h},crop=w=min(iw\\,{out_w}):h={out_h},"
         f"scale={out_w}:{out_h},gblur=sigma=14[bg];"
         f"[sa]scale={out_w}:{screen_h}[screen];"
-        f"[ca]crop=w={w}:h={h}:x={x}:y={y},scale={out_w}:{cam_h}[cam];"
+        f"[ca]crop=w={w}:h={h}:x={x}:y={y},scale={cam_w}:{cam_h}[cam];"
         f"[bg][screen]overlay=x=0:y={filler_h // 2}[withscreen];"
-        f"[withscreen][cam]overlay=x=0:y={filler_h // 2 + screen_h},"
+        f"[withscreen][cam]overlay=x={cam_x}:y={filler_h // 2 + screen_h},"
         f"setsar=1[v]"
     )

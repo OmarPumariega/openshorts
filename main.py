@@ -23,6 +23,7 @@ from google.genai import types as genai_types
 
 import gemini_worker
 import layout_picker
+import screencast_layout
 import llm_client
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words)
@@ -807,6 +808,49 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
+def render_letterbox_fit(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
+    """Fit the WHOLE frame inside a vertical canvas — no crop, no face
+    tracking, nothing cut off. Scaled to the canvas width and padded with
+    solid black top and bottom, the classic "rotate your phone" clip: every
+    pixel the source had is still there, just smaller.
+
+    Deliberately the simplest of the three delivery formats generated per
+    clip (see render_clip for the face-tracked crop and finalize_clip_
+    passthrough for the untouched horizontal): no scene detection, no
+    reframe engine, one ffmpeg pass. That simplicity is the point — the
+    face-tracked crop is the path that has needed real per-video tuning to
+    look right, and this is the format that always looks like the source
+    because it never alters it, just shrinks it to fit.
+    """
+    if os.path.exists(final_output_video):
+        os.remove(final_output_video)
+    print(f"🎬 Letterbox fit (whole frame, no crop): {input_video}")
+    cap = cv2.VideoCapture(input_video)
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    if not orig_w or not orig_h:
+        raise IOError(f"Could not read resolution of {input_video}")
+
+    out_h = orig_h if orig_h >= orig_w else int(orig_w / aspect_ratio)
+    out_w = int(out_h * aspect_ratio)
+    out_w += out_w % 2
+    out_h += out_h % 2
+
+    vf = (
+        f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+        f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+    )
+    cmd = [
+        'ffmpeg', '-y', '-i', input_video, '-vf', vf,
+        *video_encode_args(QUALITY_FAST), *audio_encode_args(),
+        final_output_video,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    print(f"✅ Clip saved to {final_output_video}")
+    return True
+
+
 def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
     """Burn the default caption style onto a finished clip.
 
@@ -884,19 +928,21 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
 
 
 def render_clip(input_video, final_output_video, output_format="auto",
-                force_strategy=None, crop_overrides=None):
+                force_strategy=None, crop_overrides=None, content_ranges=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
     clip editor's whole-clip framing override. ``crop_overrides`` positions
     individual scenes by hand (the per-scene reframing editor) and wins over
-    ``force_strategy`` for the scenes it names."""
+    ``force_strategy`` for the scenes it names. ``content_ranges`` is already
+    in this clip's own timeline — see process_video_to_vertical's docstring."""
     if output_format == "horizontal":
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
                                      force_strategy=force_strategy,
-                                     crop_overrides=crop_overrides)
+                                     crop_overrides=crop_overrides,
+                                     content_ranges=content_ranges)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -965,7 +1011,7 @@ def apply_watermark(video_path):
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
-                              force_strategy=None, crop_overrides=None):
+                              force_strategy=None, crop_overrides=None, content_ranges=None):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
     scene detection and Active Speaker Tracking (MediaPipe).
@@ -973,6 +1019,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     force_strategy / crop_overrides pin layouts and scene crops by hand (v2
     engine only — the v1 loop below has no layout concept beyond its own
     classifier).
+    content_ranges: screencast_layout.detect_content_ranges() output, already
+    translated into THIS clip's own 0-based timeline (see the call site in
+    __main__). v1 has no layout concept, so it's simply unused there.
     """
     script_start_time = time.time()
 
@@ -984,7 +1033,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
-                                       crop_overrides=crop_overrides)
+                                       crop_overrides=crop_overrides,
+                                       content_ranges=content_ranges)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
@@ -1510,11 +1560,44 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
 
+    # Same reasoning for content_ranges: where the wide on-screen content is
+    # doesn't change between a video's own clips, so this runs once on the
+    # SOURCE video's full timeline, in absolute seconds. Each clip below
+    # translates the ranges that overlap it into its own 0-based timeline
+    # before rendering (see _process_one_clip / the --skip-analysis branch).
+    # screencast_layout.ENABLED gates this internally (checkbox opt-in or
+    # layout_picker's own verdict above), so this is a no-op otherwise.
+    source_content_ranges = []
+    if screencast_layout.ENABLED:
+        try:
+            _cap = cv2.VideoCapture(input_video)
+            _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+            _source_duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
+            _cap.release()
+            source_content_ranges = screencast_layout.detect_content_ranges(
+                input_video, _source_duration)
+        except Exception as e:
+            print(f"⚠️ On-screen content check skipped ({e}) — using face-only routing.")
+
+    def _content_ranges_for_clip(clip_start, clip_end):
+        """Overlap of the source-video ranges with [clip_start, clip_end),
+        shifted onto the clip's own 0-based timeline."""
+        out = []
+        for s, e, what, frac in source_content_ranges:
+            local_s = max(0.0, s - clip_start)
+            local_e = min(clip_end - clip_start, e - clip_start)
+            if local_e - local_s >= 0.5:
+                out.append((local_s, local_e, what, frac))
+        return out
+
     # 2. Decision: Analyze clips or process whole?
     if args.skip_analysis:
         print("⏩ Skipping analysis, processing entire video...")
         output_file = args.output if args.output else os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        render_clip(input_video, output_file, output_format)
+        # The "clip" here IS the whole source video (starts at 0), so the
+        # source-timeline ranges are already in the right coordinate system.
+        render_clip(input_video, output_file, output_format,
+                   content_ranges=source_content_ranges)
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
@@ -1572,7 +1655,6 @@ if __name__ == '__main__':
 
                 clip_filename = f"{video_title}_clip_{i+1}.mp4"
                 clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
-                clip_final_path = os.path.join(output_dir, clip_filename)
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
@@ -1587,15 +1669,44 @@ if __name__ == '__main__':
                     ]
                     subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-                    success = render_clip(clip_temp_path, clip_final_path, output_format)
-                    if success and os.environ.get("WATERMARK") == "1":
-                        apply_watermark(clip_final_path)
-                    if success:
+                    # Every clip ships in three formats from the same cut: the
+                    # face-tracked vertical crop (the default, the one that's
+                    # editable/re-styleable from the UI), a horizontal
+                    # passthrough (rotate the phone, watch it framed exactly
+                    # as the source was), and a vertical letterbox fit (the
+                    # whole frame shrunk to fit, black bars — for a slot where
+                    # nothing may be cropped, like a Story). Only the crop
+                    # goes through the heavier face-tracking reframe engine;
+                    # the other two are a single cheap ffmpeg pass each.
+                    variants = [
+                        ("", lambda out: render_clip(
+                            clip_temp_path, out, output_format,
+                            content_ranges=_content_ranges_for_clip(start, end))),
+                        ("_horizontal", lambda out: finalize_clip_passthrough(clip_temp_path, out)),
+                        ("_letterboxed", lambda out: render_letterbox_fit(clip_temp_path, out)),
+                    ]
+
+                    any_success = False
+                    for suffix, render_fn in variants:
+                        variant_path = os.path.join(
+                            output_dir, f"{video_title}_clip_{i+1}{suffix}.mp4")
+                        try:
+                            success = render_fn(variant_path)
+                        except Exception as e:
+                            print(f"   ⚠️ {suffix or 'vertical'} format failed "
+                                  f"({type(e).__name__}: {e}) — skipping it, the "
+                                  f"other formats still ship.")
+                            continue
+                        if not success:
+                            continue
+                        any_success = True
+                        if os.environ.get("WATERMARK") == "1":
+                            apply_watermark(variant_path)
                         # Captions last, so they sit on top of the watermark and
                         # the canonical file stays clean for re-styling.
-                        auto_caption_clip(clip_final_path, transcript, start, end)
-                        print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                    return success
+                        auto_caption_clip(variant_path, transcript, start, end)
+                        print(f"   ✅ Clip {i+1}{suffix} ready: {variant_path}")
+                    return any_success
                 finally:
                     if os.path.exists(clip_temp_path):
                         os.remove(clip_temp_path)

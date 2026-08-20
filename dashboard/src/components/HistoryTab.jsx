@@ -18,7 +18,7 @@ export default function HistoryTab({ onOpenProject }) {
     setError('');
     apiJson('/api/history')
       .then((d) => setProjects(d.projects || []))
-      .catch(() => setError('Could not load your projects.'));
+      .catch(() => setError('No se pudieron cargar tus proyectos.'));
   };
 
   useEffect(load, []);
@@ -30,7 +30,7 @@ export default function HistoryTab({ onOpenProject }) {
     try {
       await onOpenProject(jobId);
     } catch (e) {
-      setOpenError('Could not open this project. Its working files may have been cleaned up.');
+      setOpenError('No se pudo abrir este proyecto. Puede que sus archivos de trabajo ya se hayan eliminado.');
     } finally {
       setOpening(null);
     }
@@ -52,7 +52,7 @@ export default function HistoryTab({ onOpenProject }) {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (e) {
-      alert(`Download failed: ${e.message}`);
+      alert(`Error al descargar: ${e.message}`);
     } finally {
       setDownloadingAll(null);
     }
@@ -70,17 +70,18 @@ export default function HistoryTab({ onOpenProject }) {
     <div className="h-full overflow-y-auto p-8 max-w-6xl mx-auto animate-fade">
       <div className="flex items-start justify-between gap-4 mb-2">
         <div>
-          <p className="eyebrow mb-1.5">02 · HISTORY</p>
-          <h1 className="font-display lowercase text-2xl text-ink">Your projects</h1>
+          <p className="eyebrow mb-1.5">02 · HISTORIAL</p>
+          <h1 className="font-display lowercase text-2xl text-ink">Tus proyectos</h1>
         </div>
-        <button onClick={load} className="btn-quiet px-3 py-2 text-xs shrink-0" title="refresh">
-          <RefreshCw size={14} /> refresh
+        <button onClick={load} className="btn-quiet px-3 py-2 text-xs shrink-0" title="actualizar">
+          <RefreshCw size={14} /> actualizar
         </button>
       </div>
       <p className="text-muted text-sm mb-8 lowercase">
-        Every video you've processed, read straight off disk — there's no separate database. Projects are kept
-        for a limited window (configured via <code className="font-mono text-ink2">CLEANUP_RETENTION_HOURS</code>,
-        typically 24–48h) and then their files are deleted automatically to keep the server tidy.
+        Todos los vídeos que has procesado, leídos directamente del disco — no hay una base de datos aparte.
+        Los proyectos se conservan durante una ventana limitada (configurada mediante
+        <code className="font-mono text-ink2">CLEANUP_RETENTION_HOURS</code>, normalmente 24–48h) y después sus
+        archivos se eliminan automáticamente para mantener el servidor ordenado.
       </p>
 
       {error && <p className="text-danger text-sm mb-4">{error}</p>}
@@ -89,7 +90,7 @@ export default function HistoryTab({ onOpenProject }) {
       {projects && projects.length === 0 && (
         <div className="text-center py-20 text-muted">
           <Film size={40} className="mx-auto mb-4 text-muted" />
-          <p className="lowercase">No projects yet. Generate your first short from the Clip Generator.</p>
+          <p className="lowercase">Aún no hay proyectos. Genera tu primer short desde el Generador de clips.</p>
         </div>
       )}
 
@@ -107,9 +108,9 @@ export default function HistoryTab({ onOpenProject }) {
                   <span>{project.clip_count} clip{project.clip_count === 1 ? '' : 's'}</span>
                   <span>·</span>
                   {project.source_available ? (
-                    <span className="text-ok flex items-center gap-1"><Video size={12} /> original available</span>
+                    <span className="text-ok flex items-center gap-1"><Video size={12} /> original disponible</span>
                   ) : (
-                    <span className="text-muted flex items-center gap-1"><VideoOff size={12} /> original cleaned up</span>
+                    <span className="text-muted flex items-center gap-1"><VideoOff size={12} /> original eliminado</span>
                   )}
                 </p>
               </div>
@@ -120,7 +121,7 @@ export default function HistoryTab({ onOpenProject }) {
                     target="_blank"
                     rel="noreferrer"
                     className="btn-ghost px-3 py-2 text-xs"
-                    title="Play the original source video"
+                    title="Reproducir el vídeo original"
                   >
                     <Video size={14} /> original
                   </a>
@@ -130,11 +131,11 @@ export default function HistoryTab({ onOpenProject }) {
                     onClick={() => handleDownloadAll(project.job_id)}
                     disabled={downloadingAll === project.job_id}
                     className="btn-ghost px-3 py-2 text-xs"
-                    title="Download all clips as a ZIP"
+                    title="Descargar todos los clips como ZIP"
                   >
                     {downloadingAll === project.job_id
-                      ? <><Loader2 size={14} className="animate-spin" /> zipping…</>
-                      : <><Download size={14} /> all clips</>}
+                      ? <><Loader2 size={14} className="animate-spin" /> comprimiendo…</>
+                      : <><Download size={14} /> todos los clips</>}
                   </button>
                 )}
                 {onOpenProject && (
@@ -142,11 +143,11 @@ export default function HistoryTab({ onOpenProject }) {
                     onClick={() => handleOpen(project.job_id)}
                     disabled={!!opening}
                     className="btn-primary px-3 py-2 text-xs"
-                    title="Reopen this project in the full Clip Generator editor — subtitles, reframe, hook, everything"
+                    title="Reabrir este proyecto en el editor completo del Generador de clips — subtítulos, reencuadre, gancho, todo"
                   >
                     {opening === project.job_id
-                      ? <><Loader2 size={14} className="animate-spin" /> opening…</>
-                      : <><Pencil size={14} /> open to edit</>}
+                      ? <><Loader2 size={14} className="animate-spin" /> abriendo…</>
+                      : <><Pencil size={14} /> abrir para editar</>}
                   </button>
                 )}
               </div>
@@ -178,7 +179,7 @@ export default function HistoryTab({ onOpenProject }) {
                           onClick={() => handleOpen(project.job_id)}
                           disabled={!!opening}
                           className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-paper/90 text-ink2 opacity-0 group-hover:opacity-100 hover:text-brass hover:bg-paper transition-all"
-                          title="Open this project to edit — subtitles, reframe, hook"
+                          title="Abrir este proyecto para editar — subtítulos, reencuadre, gancho"
                         >
                           <Pencil size={12} />
                         </button>
@@ -194,7 +195,7 @@ export default function HistoryTab({ onOpenProject }) {
                           download
                           className="text-micro font-mono uppercase text-brass hover:text-ink flex items-center gap-1 transition-colors"
                         >
-                          <Download size={12} /> download
+                          <Download size={12} /> descargar
                         </a>
                       )}
                     </div>
@@ -202,7 +203,7 @@ export default function HistoryTab({ onOpenProject }) {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted p-4 lowercase">No clip files left for this project.</p>
+              <p className="text-xs text-muted p-4 lowercase">No quedan archivos de clips para este proyecto.</p>
             )}
           </section>
         ))}

@@ -47,7 +47,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                     Object.entries(salvos).map(([k, v]) => [Number(k), v])
                 ));
             } catch (e) {
-                if (alive) setError(e?.message || 'Could not read the scenes of this clip.');
+                if (alive) setError(e?.message || 'No se pudieron leer las escenas de este clip.');
             } finally {
                 if (alive) setLoading(false);
             }
@@ -130,7 +130,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
             if (onReframed) onReframed(clipIndex, res);
             onClose();
         } catch (e) {
-            setError(e?.message || 'The re-render failed.');
+            setError(e?.message || 'Ha fallado el re-renderizado.');
         } finally {
             setSaving(false);
         }
@@ -143,7 +143,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                     <div className="flex items-center gap-2.5 min-w-0">
                         <Crosshair size={18} className="text-brass shrink-0" />
                         <div className="min-w-0">
-                            <h2 className="text-base font-medium text-ink lowercase truncate">reframing</h2>
+                            <h2 className="text-base font-medium text-ink lowercase truncate">reencuadrar</h2>
                             {clipTitle && <p className="text-xs text-muted truncate">{clipTitle}</p>}
                         </div>
                     </div>
@@ -154,15 +154,15 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-5">
                     <p className="text-xs text-muted leading-relaxed">
-                        Play a scene to hear who is talking, then drag the rectangle over
-                        the person you want. Each scene is one camera. Scenes you leave
-                        alone keep the automatic camera.
+                        Reproduce una escena para oír quién habla y luego arrastra el rectángulo sobre
+                        la persona que quieras. Cada escena es una cámara. Las escenas que no toques
+                        conservan la cámara automática.
                     </p>
 
                     {loading && (
                         <div className="flex items-center gap-2 text-sm text-muted py-8 justify-center">
                             <Loader2 size={18} className="animate-spin text-brass" />
-                            reading the scenes…
+                            leyendo las escenas…
                         </div>
                     )}
 
@@ -194,18 +194,18 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                 <div className="flex items-center justify-between gap-3 p-4 border-t border-rule">
                     <span className="text-xs text-muted">
                         {adjusted === 0
-                            ? 'nothing adjusted yet'
-                            : `${adjusted} scene${adjusted > 1 ? 's' : ''} reframed by hand`}
+                            ? 'nada ajustado todavía'
+                            : `${adjusted} escena${adjusted > 1 ? 's' : ''} reencuadrada${adjusted > 1 ? 's' : ''} a mano`}
                     </span>
                     <div className="flex items-center gap-2">
-                        <button onClick={onClose} className="btn-quiet py-2 px-4 text-sm">cancel</button>
+                        <button onClick={onClose} className="btn-quiet py-2 px-4 text-sm">cancelar</button>
                         <button
                             onClick={handleSave}
                             disabled={!adjusted || saving}
                             className="btn-primary py-2 px-4 text-sm disabled:opacity-40"
                         >
                             {saving ? <Loader2 size={16} className="animate-spin" /> : null}
-                            {saving ? 're-rendering…' : 'apply reframing'}
+                            {saving ? 're-renderizando…' : 'aplicar reencuadre'}
                         </button>
                     </div>
                 </div>
@@ -300,12 +300,12 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                     <button
                         onClick={onPlayToggle}
                         className="flex items-center gap-1 text-ink2 hover:text-brass transition-colors"
-                        title="play this scene with sound"
+                        title="reproducir esta escena con sonido"
                     >
                         {playing ? <Pause size={13} /> : <Play size={13} />}
                     </button>
                     <span className="readout text-muted truncate">
-                        scene {scene.index + 1} · {fmt(scene.start)}–{fmt(scene.end)}
+                        escena {scene.index + 1} · {fmt(scene.start)}–{fmt(scene.end)}
                     </span>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
@@ -313,16 +313,16 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                         onClick={onToggleSplit}
                         className={`flex items-center gap-1 transition-colors ${
                             isSplit ? 'text-brass' : 'text-muted hover:text-ink2'}`}
-                        title="stack two regions instead of one window"
+                        title="apilar dos regiones en lugar de una ventana"
                     >
-                        <Columns2 size={12} /> split
+                        <Columns2 size={12} /> dividir
                     </button>
                     {touched ? (
                         <button onClick={onReset} className="flex items-center gap-1 text-brass hover:underline">
-                            <RotateCcw size={12} /> automatic
+                            <RotateCcw size={12} /> automático
                         </button>
                     ) : (
-                        <span className="text-muted">automatic</span>
+                        <span className="text-muted">automático</span>
                     )}
                 </div>
             </div>
@@ -362,14 +362,14 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                 )}
 
                 {isSplit
-                    ? [win(value.top.x, 'top', 'top'), win(value.bottom.x, 'bottom', 'bottom')]
+                    ? [win(value.top.x, 'arriba', 'top'), win(value.bottom.x, 'abajo', 'bottom')]
                     : win(value, null, 'single')}
             </div>
 
             {isSplit && (
                 <p className="text-[11px] text-muted leading-snug">
-                    Two regions stacked in the vertical frame: <strong>top</strong> above,
-                    <strong> bottom</strong> below. Drag each one onto the person it should hold.
+                    Dos regiones apiladas en el fotograma vertical: <strong>arriba</strong> encima,
+                    <strong> abajo</strong> debajo. Arrastra cada una sobre la persona que debe encuadrar.
                 </p>
             )}
         </div>

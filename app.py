@@ -374,7 +374,7 @@ def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     except Exception:
         return False
 
-def _canonical_clip_file(output_dir, base_name, index):
+def _canonical_clip_file(output_dir, base_name, index, suffix=""):
     """The file to serve for clip ``index``, preferring a derived version.
 
     The pipeline writes the clean reframe as ``<base>_clip_<n>.mp4`` and any
@@ -384,14 +384,22 @@ def _canonical_clip_file(output_dir, base_name, index):
     canonical name from disk — restore after a restart, the R2 upload, the
     download bundle — must therefore resolve to the newest derived file, or
     clips silently lose their captions (or their recut) on a redeploy.
+
+    ``suffix`` selects which of the three formats main.py renders per clip:
+    "" for the face-tracked vertical crop (the only one that's editable —
+    recuts/re-styles only ever write that bare name), "_horizontal" for the
+    untouched passthrough, "_letterboxed" for the whole-frame fit. Each is
+    captioned independently, so each has its own ``subtitled_*_<clean>``
+    to resolve.
     """
-    clean = f"{base_name}_clip_{index + 1}.mp4"
+    clean = f"{base_name}_clip_{index + 1}{suffix}.mp4"
     try:
         # subtitled_*_{clean} also matches subtitled_<ts>_recut_<ts>_{clean},
         # i.e. a captioned recut; the bare recut_ pattern covers recuts that
-        # shipped uncaptioned.
-        derived = (glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"recut_*_{clean}")))
+        # shipped uncaptioned. Recuts only ever apply to the vertical crop.
+        derived = glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
+        if not suffix:
+            derived += glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
     except Exception:
         derived = []
     if not derived:
@@ -400,17 +408,43 @@ def _canonical_clip_file(output_dir, base_name, index):
     return os.path.basename(max(derived, key=os.path.getmtime))
 
 
+def _extra_format_urls(output_dir, job_id, base_name, index):
+    """{"video_url_horizontal": ..., "video_url_letterboxed": ...} for
+    whichever of the two extra delivery formats actually rendered.
+
+    Older clips (from before clips shipped in three formats) only have the
+    vertical crop on disk — checked here rather than assumed, so those jobs
+    degrade to just the one format instead of the frontend getting a link
+    that 404s.
+    """
+    urls = {}
+    for suffix, key in (("_horizontal", "video_url_horizontal"),
+                        ("_letterboxed", "video_url_letterboxed")):
+        filename = _canonical_clip_file(output_dir, base_name, index, suffix=suffix)
+        if os.path.exists(os.path.join(output_dir, filename)):
+            urls[key] = f"/videos/{job_id}/{filename}"
+    return urls
+
+
 def _strip_burned_captions(output_dir, filename):
     """Walk ``subtitled_<ts>_`` prefixes back to the file without burned captions.
 
-    Returns the name unchanged when there is nothing to strip (or when the
-    underlying file is gone, e.g. a library restore that only kept the current
-    version).
+    Returns ``(clean_filename, ok)``. ``ok`` is True once ``clean_filename``
+    genuinely carries no ``subtitled_`` prefix. It's False when the walk hit
+    one whose underlying pre-caption file is gone (cleaned up, or a library
+    restore that only kept the current version) — ``clean_filename`` is then
+    STILL a captioned file, and callers must not treat it as a clean base:
+    doing so burns new content directly on top of the old captions instead of
+    replacing them (25-aug-2026: this is exactly what produced two overlapping
+    caption styles, different fonts included, on a real user's clip — see the
+    callers' checks below).
     """
     while True:
         m = re.match(r'^subtitled_\d+_(.+)$', filename)
-        if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
-            return filename
+        if not m:
+            return filename, True
+        if not os.path.exists(os.path.join(output_dir, m.group(1))):
+            return filename, False
         filename = m.group(1)
 
 
@@ -483,6 +517,7 @@ def _recover_jobs_from_disk():
                     clip['video_url'] = (
                         f"/videos/{job_id}/"
                         f"{_canonical_clip_file(job_path, base_name, i)}")
+                clip.update(_extra_format_urls(job_path, job_id, base_name, i))
             owner = None
             owner_path = os.path.join(job_path, ".owner")
             if os.path.exists(owner_path):
@@ -1349,7 +1384,8 @@ async def run_job(job_id, job_data):
                 for i, clip in enumerate(clips):
                      clip_filename = _canonical_clip_file(output_dir, base_name, i)
                      clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                
+                     clip.update(_extra_format_urls(output_dir, job_id, base_name, i))
+
                 jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
             else:
                  jobs[job_id]['status'] = 'failed'
@@ -1799,16 +1835,22 @@ async def get_history(limit: int = 50):
             clips = []
             for i, clip in enumerate(shorts):
                 url = None
-                if i < len(mem_clips):
-                    url = (mem_clips[i] or {}).get('video_url')
+                mem_clip = mem_clips[i] if i < len(mem_clips) else None
+                if mem_clip:
+                    url = mem_clip.get('video_url')
                 url = url or clip.get('video_url')
                 if not url:
                     filename = _canonical_clip_file(job_dir, base_name, i)
                     if os.path.exists(os.path.join(job_dir, filename)):
                         url = f"/videos/{job_id}/{filename}"
+                extra = {k: (mem_clip or {}).get(k) or clip.get(k)
+                        for k in ("video_url_horizontal", "video_url_letterboxed")}
+                if not any(extra.values()):
+                    extra = _extra_format_urls(job_dir, job_id, base_name, i)
                 clips.append({
                     "index": i,
                     "video_url": url,
+                    **extra,
                     "title": clip.get('video_title_for_youtube_short'),
                     "hook": clip.get('viral_hook_text'),
                     "start": clip.get('start'),
@@ -1866,15 +1908,21 @@ async def download_all_clips(job_id: str, request: Request):
 
     files = []
     for i, clip in enumerate(data.get('shorts', [])):
-        url = None
-        if i < len(mem_clips):
-            url = (mem_clips[i] or {}).get('video_url')
-        url = url or clip.get('video_url')
+        mem_clip = mem_clips[i] if i < len(mem_clips) else None
+        url = (mem_clip or {}).get('video_url') or clip.get('video_url')
         filename = (os.path.basename(url.split('/')[-1]) if url
                     else _canonical_clip_file(output_dir, base_name, i))
         path = os.path.join(output_dir, filename)
         if filename and os.path.exists(path):
             files.append((i, path))
+        # The two extra delivery formats aren't tracked by video_url/mem_clips
+        # at all (they're never edited/recut, so there's no rename history to
+        # prefer) — the canonical suffix is the only name they ever have.
+        for suffix in ("_horizontal", "_letterboxed"):
+            extra_name = _canonical_clip_file(output_dir, base_name, i, suffix=suffix)
+            extra_path = os.path.join(output_dir, extra_name)
+            if os.path.exists(extra_path):
+                files.append((i, extra_path))
 
     if not files:
         raise HTTPException(status_code=404, detail="No clip files found for this job")
@@ -1988,6 +2036,7 @@ async def restore_project(job_id: str, request: Request):
                 clip['video_url'] = (
                     f"/videos/{job_id}/"
                     f"{_canonical_clip_file(job_dir, base_name, i)}")
+            clip.update(_extra_format_urls(job_dir, job_id, base_name, i))
         jobs[job_id] = {
             'status': 'completed',
             'logs': ["♻️ Project restored from your library."],
@@ -2088,7 +2137,15 @@ async def edit_clip(
         # Edit the clip WITHOUT its burned captions, then put them back on top —
         # otherwise the captions are baked into the edit and the next subtitle
         # pass stacks a second layer over them (see _reapply_captions).
-        clean_name = _strip_burned_captions(os.path.join(OUTPUT_DIR, req.job_id), filename)
+        clean_name, stripped_ok = _strip_burned_captions(os.path.join(OUTPUT_DIR, req.job_id), filename)
+        if not stripped_ok:
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede editar este clip: el archivo sin subtítulos ya no está en "
+                       "el servidor, así que la edición se aplicaría sobre los subtítulos "
+                       "quemados. Abre \"editar clip\" y recorta el clip de nuevo (se regenera "
+                       "desde el vídeo de origen) antes de reintentarlo.",
+            )
         had_captions = clean_name != filename
         if had_captions:
             filename = clean_name
@@ -3200,7 +3257,15 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
     # Re-subtitling must replace previous subtitles instead of burning over them.
-    filename = _strip_burned_captions(output_dir, filename)
+    filename, stripped_ok = _strip_burned_captions(output_dir, filename)
+    if not stripped_ok:
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede volver a aplicar el estilo: el archivo de este clip sin "
+                   "subtítulos ya no está en el servidor, así que los subtítulos nuevos se "
+                   "superpondrían a los antiguos. Abre \"editar clip\" y recorta el clip de "
+                   "nuevo (se regenera desde el vídeo de origen) y vuelve a aplicar el estilo.",
+        )
 
     input_path = os.path.join(output_dir, filename)
     if not os.path.exists(input_path):
@@ -3428,7 +3493,15 @@ async def add_hook(req: HookRequest, request: Request):
     # Same invariant as /api/edit: overlay onto the clip WITHOUT its burned
     # captions, then put them back on top, so a later restyle never stacks a
     # second caption layer (see _reapply_captions).
-    clean_name = _strip_burned_captions(output_dir, filename)
+    clean_name, stripped_ok = _strip_burned_captions(output_dir, filename)
+    if not stripped_ok:
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede añadir el gancho: el archivo sin subtítulos ya no está en el "
+                   "servidor, así que el gancho se aplicaría sobre los subtítulos quemados. "
+                   "Abre \"editar clip\" y recorta el clip de nuevo (se regenera desde el "
+                   "vídeo de origen) antes de reintentarlo.",
+        )
     had_captions = clean_name != filename
     if had_captions:
         filename = clean_name

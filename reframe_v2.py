@@ -348,10 +348,22 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         from scenedetect import FrameTimecode
         scenes = [(FrameTimecode(0, fps), FrameTimecode(total, fps))]
 
+    if force_strategy:
+        content_ranges = []  # no screencast/inset upgrades over an explicit choice
+
+    # A shot that toggles between screen-share and full camera without a hard
+    # cut (a presenter switching windows mid-take) is one scene to PySceneDetect
+    # but needs two different layout verdicts — split it at the content range's
+    # own boundaries first, so the per-scene strategy below is decided on a
+    # span that is consistently one or the other. See split_scenes_at_content_
+    # boundaries' docstring for why this can't be fixed in camera_inset.py.
+    if content_ranges:
+        scenes = screencast_layout.split_scenes_at_content_boundaries(
+            scenes, fps, content_ranges)
+
     scene_boundaries = [(s.get_frames(), e.get_frames()) for s, e in scenes]
     if force_strategy:
         strategies = [force_strategy] * len(scenes)
-        content_ranges = []  # no screencast/inset upgrades over an explicit choice
         print(f"   🎯 Framing override: every scene -> {force_strategy}")
     else:
         strategies = m.analyze_scenes_strategy(input_video, scenes)

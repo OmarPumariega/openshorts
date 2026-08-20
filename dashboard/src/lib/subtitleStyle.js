@@ -7,6 +7,7 @@
 // instance with no account system, and a caption look is not a secret —
 // unlike the Gemini key, there is no reason to keep it out of the browser.
 const STORAGE_KEY = 'openshorts_default_style';
+const CUSTOM_PRESETS_KEY = 'openshorts_custom_presets';
 
 export const FONT_OPTIONS = [
     { value: 'Verdana', label: 'Verdana' },
@@ -116,4 +117,71 @@ export function clearDefaultStyle() {
     try {
         localStorage.removeItem(STORAGE_KEY);
     } catch { /* ignore */ }
+}
+
+// User-created caption looks (named, saved from the current editor state) —
+// distinct from the built-in CAPTION_PRESETS above, which ship with the app
+// and can't be edited or removed. Stored as a flat list in localStorage,
+// same private-single-user rationale as the default style profile.
+export function loadCustomPresets() {
+    try {
+        const raw = localStorage.getItem(CUSTOM_PRESETS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
+function persistCustomPresets(presets) {
+    try {
+        localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(presets));
+    } catch {
+        // localStorage full/unavailable — nothing to do.
+    }
+    return presets;
+}
+
+// Snapshots the given style (whatever the editor currently holds) under a
+// user-chosen name and appends it to the saved list. Returns the new preset.
+export function saveCustomPreset(name, style) {
+    const { presetId, ...styleFields } = style;
+    const preset = {
+        id: `custom_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        label: name,
+        custom: true,
+        ...styleFields,
+    };
+    persistCustomPresets([...loadCustomPresets(), preset]);
+    return preset;
+}
+
+// Removes a custom preset by id and returns the resulting list.
+export function deleteCustomPreset(id) {
+    return persistCustomPresets(loadCustomPresets().filter((p) => p.id !== id));
+}
+
+// Overwrites an existing custom preset's style fields in place (name/id kept)
+// — the "I tweaked a preset I already saved, update it" path, as opposed to
+// saveCustomPreset which always appends a new one. Returns the resulting list.
+export function updateCustomPreset(id, style) {
+    const { presetId, ...styleFields } = style;
+    const presets = loadCustomPresets();
+    const idx = presets.findIndex((p) => p.id === id);
+    if (idx === -1) return presets;
+    const next = presets.slice();
+    next[idx] = { ...next[idx], ...styleFields };
+    return persistCustomPresets(next);
+}
+
+// Custom presets snapshot the *entire* editable style (unlike the built-in
+// CAPTION_PRESETS, which only pin a handful of fields and reset the rest),
+// so restoring one is just re-hydrating it against the factory baseline.
+export function customPresetToStyle(preset) {
+    const { id, label, custom, ...styleFields } = preset;
+    return {
+        ...FACTORY_DEFAULT_STYLE,
+        ...styleFields,
+        presetId: id,
+    };
 }

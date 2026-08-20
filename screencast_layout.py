@@ -53,6 +53,17 @@ STACK_MAX_WIDTH_FRACTION = 0.85
 # Seconds of overlap before a scene counts as showing the content.
 MIN_OVERLAP_SECONDS = 0.25
 
+# ...AND that overlap must cover at least this fraction of the scene's own
+# duration. The absolute-seconds gate alone let a scene through on a sliver:
+# a 6.43s scene with only its last 0.39s brushing a content range (6% of it,
+# comfortably over 0.25s) got the WHOLE scene routed as screen-share, showing
+# the same wide-content crop over a talking-head shot for the other 94%.
+# split_scenes_at_content_boundaries() already carves out any boundary worth
+# a scene of its own (see MIN_SUBSCENE_SECONDS there); a boundary too close
+# to a scene's edge to clear THAT bar still leaves this fraction gate as the
+# backstop against routing the scene on its strength alone.
+MIN_OVERLAP_FRACTION = 0.5
+
 # The speaker crop below the content needs a face of at least this width
 # (fraction of frame width). Smaller than this and the bottom half is mostly
 # desktop with a stamp-sized webcam in it, which is worse than GENERAL.
@@ -153,15 +164,68 @@ def _face_centre(candidates, frame_w):
 def overlapping_width(scene_start, scene_end, ranges):
     """Widest content the scene overlaps, as a fraction of frame width.
 
-    0.0 when the scene overlaps nothing, which leaves its routing untouched.
+    0.0 when the scene overlaps nothing (or only a sliver of it — see
+    MIN_OVERLAP_FRACTION), which leaves its routing untouched.
     """
+    min_covered = max(MIN_OVERLAP_SECONDS,
+                       MIN_OVERLAP_FRACTION * (scene_end - scene_start))
     widest = 0.0
     for r in ranges:
         start, end = r[0], r[1]
         width = r[3] if len(r) > 3 else 1.0
-        if min(scene_end, end) - max(scene_start, start) > MIN_OVERLAP_SECONDS:
+        if min(scene_end, end) - max(scene_start, start) >= min_covered:
             widest = max(widest, width)
     return widest
+
+
+# Below this, a sub-scene created by a content-range boundary is a sliver
+# too short to be worth a layout decision of its own (a boundary landing a
+# couple of frames from the scene's real edge, say) — merged back into
+# its neighbour instead of kept as its own scene.
+MIN_SUBSCENE_SECONDS = 0.5
+
+
+def split_scenes_at_content_boundaries(scenes, fps, content_ranges):
+    """Subdivide scenes at the start/end of every content range that falls
+    strictly inside them.
+
+    PySceneDetect finds CAMERA cuts, not content changes: a presenter who
+    switches from screen-share to full camera by alt-tabbing, with OBS never
+    hard-cutting the recording, is one continuous scene to it. Routing that
+    whole scene by whichever layout its content overlap happens to win handed
+    the SAME crop to every second of it — measured on a real clip, a fixed
+    webcam-inset crop taken from the screen-share half of a 66s scene was
+    still being applied 15s later, well into the half where the presenter had
+    switched to full camera and there was no inset there to crop to; the band
+    showed a stretch of the *background* instead of a face.
+
+    Splitting first means analyze_scenes_strategy() and detect_screencast_
+    scenes() below each see spans that are consistently one or the other, so
+    the layout decision for a span matches what is actually on screen for its
+    whole duration - the same guarantee the strategy classifier already
+    assumed it had for an ordinary scene.
+    """
+    if not content_ranges:
+        return scenes
+    from scenedetect import FrameTimecode
+
+    boundary_frames = sorted({
+        int(round(t * fps)) for s, e, *_ in content_ranges for t in (s, e)
+    })
+
+    out = []
+    for start_tc, end_tc in scenes:
+        s_f, e_f = start_tc.get_frames(), end_tc.get_frames()
+        min_gap = max(1, int(round(MIN_SUBSCENE_SECONDS * fps)))
+        cuts = [f for f in boundary_frames
+                if s_f + min_gap <= f <= e_f - min_gap]
+        if not cuts:
+            out.append((start_tc, end_tc))
+            continue
+        bounds = [s_f] + cuts + [e_f]
+        out.extend((FrameTimecode(a, fps), FrameTimecode(b, fps))
+                   for a, b in zip(bounds, bounds[1:]) if b > a)
+    return out
 
 
 def _sample_timed_frames(video_path, video_duration, target_count=40, width=480,

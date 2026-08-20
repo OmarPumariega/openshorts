@@ -8,6 +8,13 @@ const STATUS_ICON = {
     idle: <Clock size={13} className="text-muted shrink-0" />,
 };
 
+const STATUS_LABEL = {
+    processing: 'procesando',
+    complete: 'completo',
+    error: 'error',
+    idle: 'inactivo',
+};
+
 // "My jobs" — every video started this browser session (or a past one, up to
 // MAX_TRACKED), each tracked independently of whichever one is currently on
 // screen. Lets the user start a new upload without losing a job still
@@ -34,13 +41,13 @@ export default function JobSwitcher({ jobs, activeJobId, onFocus, onDismiss }) {
             <button
                 onClick={() => setOpen((v) => !v)}
                 className="flex items-center gap-1.5 btn-quiet px-3 py-1.5 text-xs"
-                title="Switch between your videos"
+                title="Cambiar entre tus vídeos"
             >
                 <Layers size={14} />
-                <span className="hidden sm:inline">my jobs</span>
+                <span className="hidden sm:inline">mis trabajos</span>
                 <span className="readout">{jobs.length}</span>
                 {processingCount > 0 && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-brass animate-pulse" title={`${processingCount} processing`} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-brass animate-pulse" title={`${processingCount} procesando`} />
                 )}
             </button>
 
@@ -57,7 +64,7 @@ export default function JobSwitcher({ jobs, activeJobId, onFocus, onDismiss }) {
                                 {STATUS_ICON[j.status] || STATUS_ICON.idle}
                                 <div className="min-w-0 flex-1">
                                     <div className="text-sm text-ink2 truncate">{j.title || j.jobId}</div>
-                                    <div className="text-[10px] text-muted uppercase tracking-wide">{j.status}</div>
+                                    <div className="text-[10px] text-muted uppercase tracking-wide">{STATUS_LABEL[j.status] || j.status}</div>
                                 </div>
                                 {onDismiss && (
                                     <span
@@ -65,7 +72,7 @@ export default function JobSwitcher({ jobs, activeJobId, onFocus, onDismiss }) {
                                         tabIndex={0}
                                         onClick={(e) => { e.stopPropagation(); onDismiss(j.jobId); }}
                                         className="p-1 rounded-full text-muted opacity-0 group-hover:opacity-100 hover:text-ink hover:bg-paper2 transition-all shrink-0"
-                                        title="Remove from this list (does not delete the job)"
+                                        title="Quitar de esta lista (no elimina el trabajo)"
                                     >
                                         <X size={12} />
                                     </span>

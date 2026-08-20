@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
@@ -7,19 +7,20 @@ import SegmentedControl from './ui/SegmentedControl';
 import {
     FONT_OPTIONS, COLOR_PRESETS, HIGHLIGHT_PRESETS, CAPTION_PRESETS,
     FACTORY_DEFAULT_STYLE, loadDefaultStyle, saveDefaultStyle,
+    loadCustomPresets, saveCustomPreset, deleteCustomPreset, updateCustomPreset, customPresetToStyle,
 } from '../lib/subtitleStyle';
 
 const ANIMATION_OPTIONS = [
-    { value: 'pop', label: 'Pop' },
-    { value: 'word-highlight', label: 'Glow' },
+    { value: 'pop', label: 'Rebote' },
+    { value: 'word-highlight', label: 'Brillo' },
     { value: 'karaoke', label: 'Karaoke' },
-    { value: 'none', label: 'None' },
+    { value: 'none', label: 'Ninguna' },
 ];
 
 const POSITION_OPTIONS = [
-    { value: 'top', label: 'top' },
-    { value: 'middle', label: 'middle' },
-    { value: 'bottom', label: 'bottom' },
+    { value: 'top', label: 'arriba' },
+    { value: 'middle', label: 'medio' },
+    { value: 'bottom', label: 'abajo' },
 ];
 
 const swatchClass = (selected) =>
@@ -34,7 +35,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const initial = loadDefaultStyle() || FACTORY_DEFAULT_STYLE;
 
     const [position, setPosition] = useState(initial.position);
-    const [fontSize] = useState(initial.fontSize);
+    const [fontSize, setFontSize] = useState(initial.fontSize);
     const [fontName, setFontName] = useState(initial.fontName);
     const [fontColor, setFontColor] = useState(initial.fontColor);
     const [highlightColor, setHighlightColor] = useState(initial.highlightColor);
@@ -52,6 +53,70 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [uppercase, setUppercase] = useState(initial.uppercase);
     const [activePreset, setActivePreset] = useState(initial.presetId);
     const [defaultSaved, setDefaultSaved] = useState(false);
+
+    // User-named custom presets (Settings > Default subtitle style also
+    // reads/writes this same localStorage list — either screen can create or
+    // delete them and both stay in sync on next open).
+    const [customPresets, setCustomPresets] = useState(() => loadCustomPresets());
+    const [showNameInput, setShowNameInput] = useState(false);
+    const [presetName, setPresetName] = useState('');
+    const [presetUpdated, setPresetUpdated] = useState(false);
+
+    const currentStyleFields = () => ({
+        position, fontSize, fontName, fontColor, highlightColor,
+        borderColor, borderWidth, bgColor, bgOpacity,
+        style, effect, baseOpacity, uppercase,
+    });
+
+    // activePreset stays set through manual tweaks here (unlike Settings'
+    // DefaultStyleEditor, no control below clears it) — so as long as it
+    // still names one of our custom presets, that's the one being edited.
+    const editingPreset = customPresets.find((p) => p.id === activePreset) || null;
+    const presetDirty = editingPreset && (() => {
+        const { presetId: _b, ...stored } = customPresetToStyle(editingPreset);
+        return JSON.stringify(currentStyleFields()) !== JSON.stringify(stored);
+    })();
+
+    const applyCustomPreset = (p) => {
+        const s = customPresetToStyle(p);
+        setActivePreset(s.presetId);
+        setPosition(s.position);
+        setFontSize(s.fontSize);
+        setFontName(s.fontName);
+        setFontColor(s.fontColor);
+        setHighlightColor(s.highlightColor);
+        setBorderColor(s.borderColor);
+        setBorderWidth(s.borderWidth);
+        setBgColor(s.bgColor);
+        setBgOpacity(s.bgOpacity);
+        setStyle(s.style);
+        setEffect(s.effect);
+        setBaseOpacity(s.baseOpacity);
+        setUppercase(s.uppercase);
+        setAnimation(s.style === 'karaoke' ? (s.effect === 'pop' ? 'pop' : s.effect === 'glow' ? 'word-highlight' : 'karaoke') : 'none');
+    };
+
+    const handleSaveCustomPreset = () => {
+        const name = presetName.trim();
+        if (!name) return;
+        const preset = saveCustomPreset(name, currentStyleFields());
+        setCustomPresets((prev) => [...prev, preset]);
+        setActivePreset(preset.id);
+        setPresetName('');
+        setShowNameInput(false);
+    };
+
+    const handleUpdatePreset = () => {
+        if (!editingPreset) return;
+        setCustomPresets(updateCustomPreset(editingPreset.id, currentStyleFields()));
+        setPresetUpdated(true);
+        setTimeout(() => setPresetUpdated(false), 2000);
+    };
+
+    const handleDeleteCustomPreset = (id) => {
+        setCustomPresets(deleteCustomPreset(id));
+        if (activePreset === id) setActivePreset(null);
+    };
 
     const applyPreset = (p) => {
         setActivePreset(p.id);
@@ -172,14 +237,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles">
+        <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTÍTULOS" title="subtítulos">
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
                     {captionsLoading ? (
                         <div className="flex items-center gap-2 text-muted">
                             <Loader2 size={16} className="animate-spin" />
-                            <span className="text-sm lowercase">Loading preview...</span>
+                            <span className="text-sm lowercase">Cargando vista previa...</span>
                         </div>
                     ) : useRemotionPreview ? (
                         <RemotionPreview
@@ -197,7 +262,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 ${position === 'bottom' ? 'bottom-20' : ''}
                             `}>
                                 <span style={fallbackPreviewStyle}>
-                                    This is how your subtitles<br/>will appear on the video
+                                    Así se verán tus subtítulos<br/>en el vídeo
                                 </span>
                             </div>
                         </>
@@ -226,6 +291,81 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     </button>
                                 ))}
                             </div>
+
+                            {/* Custom presets — user-named, saved from the current style below */}
+                            {customPresets.length > 0 && (
+                                <div className="mt-2">
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {customPresets.map((p) => (
+                                            <div key={p.id} className="relative group">
+                                                <button
+                                                    onClick={() => applyCustomPreset(p)}
+                                                    className={`w-full px-2 py-1.5 rounded-input border text-xs transition-colors flex items-center gap-1.5 justify-center
+                                                        ${activePreset === p.id
+                                                            ? 'border-[color:var(--color-accent)] text-ink'
+                                                            : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                                    title={p.label}
+                                                >
+                                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlightColor }} />
+                                                    <span className="truncate">{p.label}</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteCustomPreset(p.id)}
+                                                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[color:var(--color-paper-2)] border border-rule2 text-muted hover:text-red-500 hover:border-red-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    title={`Borrar "${p.label}"`}
+                                                >
+                                                    <X size={10} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Update the preset currently loaded, if the controls below
+                                have since been tweaked away from it */}
+                            {editingPreset && (
+                                <button
+                                    onClick={handleUpdatePreset}
+                                    disabled={!presetDirty}
+                                    className="mt-2 w-full btn-primary text-xs py-2 disabled:opacity-50"
+                                    title={presetDirty ? `Sobrescribir "${editingPreset.label}" con el estilo actual` : 'No hay cambios que guardar'}
+                                >
+                                    {presetUpdated ? `✓ "${editingPreset.label}" actualizado` : `guardar cambios en "${editingPreset.label}"`}
+                                </button>
+                            )}
+
+                            {/* Save current style as a named custom preset */}
+                            <div className="mt-2">
+                                {showNameInput ? (
+                                    <div className="flex gap-1.5 animate-fade">
+                                        <input
+                                            type="text"
+                                            autoFocus
+                                            value={presetName}
+                                            onChange={(e) => setPresetName(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleSaveCustomPreset();
+                                                if (e.key === 'Escape') { setShowNameInput(false); setPresetName(''); }
+                                            }}
+                                            placeholder="nombre del preset…"
+                                            maxLength={30}
+                                            className="input-field flex-1 text-xs"
+                                        />
+                                        <button onClick={handleSaveCustomPreset} disabled={!presetName.trim()} className="btn-primary px-3 text-xs disabled:opacity-50">
+                                            crear
+                                        </button>
+                                        <button onClick={() => { setShowNameInput(false); setPresetName(''); }} className="btn-ghost px-3 text-xs">
+                                            cancelar
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button onClick={() => setShowNameInput(true)} className="w-full btn-ghost text-xs py-2">
+                                        + crear preset con el estilo actual
+                                    </button>
+                                )}
+                            </div>
+
                             <button
                                 onClick={() => {
                                     saveDefaultStyle({
@@ -237,14 +377,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     setTimeout(() => setDefaultSaved(false), 2000);
                                 }}
                                 className="mt-2 w-full text-xs text-muted hover:text-brass transition-colors flex items-center justify-center gap-1.5 py-1"
-                                title="Use this look for every new video from now on (Settings > Default subtitle style)"
+                                title="Usa este estilo para todos los vídeos nuevos a partir de ahora (Ajustes > Estilo de subtítulos por defecto)"
                             >
-                                {defaultSaved ? '✓ saved as my default' : 'save as my default style'}
+                                {defaultSaved ? '✓ guardado como mi estilo por defecto' : 'guardar como mi estilo por defecto'}
                             </button>
                             {style === 'karaoke' && (
                                 <div className="mt-3 space-y-3 animate-fade">
                                     <div className="flex items-center justify-between">
-                                        <span className="readout">UPPERCASE</span>
+                                        <span className="readout">MAYÚSCULAS</span>
                                         <label className="relative inline-flex items-center cursor-pointer">
                                             <input type="checkbox" checked={uppercase} onChange={(e) => setUppercase(e.target.checked)} className="sr-only peer" />
                                             <div className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:top-0 after:left-0 after:h-4 after:w-4 after:rounded-full after:bg-ink after:transition-all peer-checked:after:translate-x-full"></div>
@@ -252,7 +392,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     </div>
                                     <div>
                                         <div className="flex justify-between mb-1">
-                                            <span className="readout">Dim inactive words</span>
+                                            <span className="readout">Atenuar palabras inactivas</span>
                                             <span className="readout">{Math.round(baseOpacity * 100)}%</span>
                                         </div>
                                         <input
@@ -270,7 +410,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                         {/* Position Selector */}
                         <div>
-                            <p className="eyebrow mb-2">Position</p>
+                            <p className="eyebrow mb-2">Posición</p>
                             <SegmentedControl
                                 options={POSITION_OPTIONS}
                                 value={position}
@@ -281,7 +421,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                         {/* Animation Style (new) */}
                         <div>
-                            <p className="eyebrow mb-2">Animation</p>
+                            <p className="eyebrow mb-2">Animación</p>
                             <SegmentedControl
                                 options={ANIMATION_OPTIONS}
                                 value={animation}
@@ -299,7 +439,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     onClick={() => setShowTextEditor(!showTextEditor)}
                                     className="w-full flex items-center justify-between mb-2"
                                 >
-                                    <span className="eyebrow">Edit text ({captions.length} words)</span>
+                                    <span className="eyebrow">Editar texto ({captions.length} palabras)</span>
                                     <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
                                 </button>
                                 {showTextEditor && (
@@ -308,7 +448,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         onChange={(e) => handleTextEdit(e.target.value)}
                                         rows={5}
                                         className="input-field resize-none leading-relaxed animate-fade"
-                                        placeholder="Edit subtitle text..."
+                                        placeholder="Edita el texto de los subtítulos..."
                                     />
                                 )}
                             </div>
@@ -316,7 +456,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                         {/* Font Family */}
                         <div>
-                            <p className="eyebrow mb-2">Font</p>
+                            <p className="eyebrow mb-2">Fuente</p>
                             <select
                                 value={fontName}
                                 onChange={(e) => setFontName(e.target.value)}
@@ -330,7 +470,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                         {/* Text Color */}
                         <div>
-                            <p className="eyebrow mb-2">Text color</p>
+                            <p className="eyebrow mb-2">Color del texto</p>
                             <div className="flex flex-wrap items-center gap-2.5">
                                 {COLOR_PRESETS.map((c) => (
                                     <button
@@ -341,7 +481,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         title={c.label}
                                     />
                                 ))}
-                                <label className="w-6 h-6 rounded-full border border-dashed border-rule2 cursor-pointer flex items-center justify-center hover:border-brass transition-colors overflow-hidden relative" title="Custom color">
+                                <label className="w-6 h-6 rounded-full border border-dashed border-rule2 cursor-pointer flex items-center justify-center hover:border-brass transition-colors overflow-hidden relative" title="Color personalizado">
                                     <span className="text-xs text-muted leading-none">+</span>
                                     <input type="color" value={fontColor} onChange={(e) => setFontColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
                                 </label>
@@ -350,7 +490,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                         {/* Highlight Color (new) */}
                         <div>
-                            <p className="eyebrow mb-2">Highlight</p>
+                            <p className="eyebrow mb-2">Resaltado</p>
                             <div className="flex flex-wrap items-center gap-2.5">
                                 {HIGHLIGHT_PRESETS.map((c) => (
                                     <button
@@ -364,11 +504,27 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             </div>
                         </div>
 
+                        {/* Size */}
+                        <div>
+                            <div className="flex justify-between mb-1">
+                                <p className="eyebrow">Tamaño</p>
+                                <span className="readout">{fontSize}px</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="14"
+                                max="48"
+                                value={fontSize}
+                                onChange={(e) => setFontSize(parseInt(e.target.value))}
+                                className="w-full accent-[var(--color-accent)]"
+                            />
+                        </div>
+
                         {/* Border / Outline */}
                         <div>
-                            <p className="eyebrow mb-2">Border</p>
+                            <p className="eyebrow mb-2">Borde</p>
                             <div className="flex items-center gap-3">
-                                <label className="relative w-8 h-8 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Border color">
+                                <label className="relative w-8 h-8 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Color del borde">
                                     <div className="w-full h-full" style={{ backgroundColor: borderColor }} />
                                     <input type="color" value={borderColor} onChange={(e) => setBorderColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
                                 </label>
@@ -382,8 +538,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         className="w-full accent-[var(--color-accent)]"
                                     />
                                     <div className="flex justify-between">
-                                        <span className="readout">None</span>
-                                        <span className="readout">Thick</span>
+                                        <span className="readout">Ninguno</span>
+                                        <span className="readout">Grueso</span>
                                     </div>
                                 </div>
                             </div>
@@ -392,7 +548,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                         {/* Background Box */}
                         <div>
                             <div className="flex items-center justify-between mb-2">
-                                <p className="eyebrow">Background</p>
+                                <p className="eyebrow">Fondo</p>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" checked={bgOpacity > 0} onChange={(e) => setBgOpacity(e.target.checked ? 0.5 : 0)} className="sr-only peer" />
                                     <div className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:top-0 after:left-0 after:h-4 after:w-4 after:rounded-full after:bg-ink after:transition-all peer-checked:after:translate-x-full"></div>
@@ -401,7 +557,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             {bgOpacity > 0 && (
                                 <div className="space-y-3 animate-fade">
                                     <div className="flex items-center gap-3">
-                                        <label className="relative w-8 h-8 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Background color">
+                                        <label className="relative w-8 h-8 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Color de fondo">
                                             <div className="w-full h-full" style={{ backgroundColor: bgColor }} />
                                             <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
                                         </label>
@@ -415,7 +571,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                                 className="w-full accent-[var(--color-accent)]"
                                             />
                                             <div className="flex justify-between">
-                                                <span className="readout">Transparent</span>
+                                                <span className="readout">Transparente</span>
                                                 <span className="readout">{Math.round(bgOpacity * 100)}%</span>
                                             </div>
                                         </div>
@@ -445,7 +601,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 <>
                                     <div className="flex gap-2">
                                         <button onClick={onClose} className="btn-ghost">
-                                            cancel
+                                            cancelar
                                         </button>
                                         <button
                                             onClick={() => onGenerate(styleOptions)}
@@ -453,7 +609,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                             className="btn-primary flex-1"
                                         >
                                             {(isProcessing && !bulkRunning) && <Loader2 size={16} className="animate-spin text-brassink" />}
-                                            {(isProcessing && !bulkRunning) ? 'generating...' : 'apply to this clip'}
+                                            {(isProcessing && !bulkRunning) ? 'generando...' : 'aplicar a este clip'}
                                         </button>
                                     </div>
                                     {onApplyAll && bulkCount > 1 && (
@@ -463,8 +619,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                             className="btn-ghost w-full flex items-center justify-center gap-2"
                                         >
                                             {bulkRunning
-                                                ? <><Loader2 size={16} className="animate-spin" />applying to all… {bulkProgress.current}/{bulkProgress.total}</>
-                                                : `apply this style to all ${bulkCount} clips`}
+                                                ? <><Loader2 size={16} className="animate-spin" />aplicando a todos… {bulkProgress.current}/{bulkProgress.total}</>
+                                                : `aplicar este estilo a los ${bulkCount} clips`}
                                         </button>
                                     )}
                                     {/* Clips ship captioned by default, so the way
@@ -476,7 +632,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                             disabled={isProcessing}
                                             className="text-xs text-muted underline underline-offset-2 lowercase hover:text-ink2 disabled:opacity-50"
                                         >
-                                            remove captions from this clip
+                                            quitar subtítulos de este clip
                                         </button>
                                     )}
                                 </>

@@ -5,36 +5,36 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 
 const ENTRANCE_OPTIONS = [
-    { value: 'spring', label: 'Bounce' },
-    { value: 'fade', label: 'Fade' },
-    { value: 'slide-up', label: 'Slide Up' },
-    { value: 'none', label: 'None' },
+    { value: 'spring', label: 'Rebote' },
+    { value: 'fade', label: 'Difuminado' },
+    { value: 'slide-up', label: 'Deslizar arriba' },
+    { value: 'none', label: 'Ninguna' },
 ];
 
 // Must mirror hooks.py HOOK_STYLES.
 const HOOK_STYLES = [
-    { value: 'classic', label: 'Classic', box: 'rgba(255,255,255,0.94)', text: '#000' },
-    { value: 'dark', label: 'Dark', box: 'rgba(18,18,20,0.92)', text: '#fff' },
-    { value: 'yellow', label: 'Yellow', box: 'rgba(255,214,0,0.96)', text: '#000' },
-    { value: 'red', label: 'Red', box: 'rgba(220,38,38,0.96)', text: '#fff' },
-    { value: 'outline', label: 'Outline', box: 'transparent', text: '#fff', outline: true },
-    { value: 'outline_yellow', label: 'Outline+', box: 'transparent', text: '#FFD600', outline: true },
+    { value: 'classic', label: 'Clásico', box: 'rgba(255,255,255,0.94)', text: '#000' },
+    { value: 'dark', label: 'Oscuro', box: 'rgba(18,18,20,0.92)', text: '#fff' },
+    { value: 'yellow', label: 'Amarillo', box: 'rgba(255,214,0,0.96)', text: '#000' },
+    { value: 'red', label: 'Rojo', box: 'rgba(220,38,38,0.96)', text: '#fff' },
+    { value: 'outline', label: 'Contorno', box: 'transparent', text: '#fff', outline: true },
+    { value: 'outline_yellow', label: 'Contorno+', box: 'transparent', text: '#FFD600', outline: true },
 ];
 
 const POSITION_OPTIONS = [
-    { value: 'top', label: 'top' },
-    { value: 'center', label: 'center' },
-    { value: 'bottom', label: 'bottom' },
+    { value: 'top', label: 'arriba' },
+    { value: 'center', label: 'centro' },
+    { value: 'bottom', label: 'abajo' },
 ];
 
 const SIZE_OPTIONS = [
-    { value: 'S', label: 'Small' },
-    { value: 'M', label: 'Medium' },
-    { value: 'L', label: 'Large' },
+    { value: 'S', label: 'Pequeño' },
+    { value: 'M', label: 'Mediano' },
+    { value: 'L', label: 'Grande' },
 ];
 
 export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles }) {
-    const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
+    const [text, setText] = useState(initialText || 'POV: estás usando la función de gancho viral');
     const [position, setPosition] = useState('top');
     const [size, setSize] = useState('M');
     const [style, setStyle] = useState('classic');
@@ -45,7 +45,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
 
     // Build hook config for Remotion preview
     const hookConfig = {
-        text: text || 'Enter your text...',
+        text: text || 'Escribe tu texto...',
         position,
         size,
         style,
@@ -73,7 +73,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} size="lg" eyebrow="EDITOR · HOOK" title="viral hook">
+        <Modal isOpen={isOpen} onClose={onClose} size="lg" eyebrow="EDITOR · GANCHO" title="gancho viral">
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
@@ -101,7 +101,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                                         paddingRight: '12px'
                                     }}
                                 >
-                                    {text || "Enter your text..."}
+                                    {text || "Escribe tu texto..."}
                                 </div>
                             </div>
                         </>
@@ -113,20 +113,20 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                     <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
                         {/* Text Input */}
                         <div>
-                            <p className="eyebrow mb-2">Text</p>
+                            <p className="eyebrow mb-2">Texto</p>
                             <textarea
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={4}
                                 className="input-field resize-none font-serif"
                                 style={{ fontFamily: 'Noto Serif, serif' }}
-                                placeholder="Enter text that will stop the scroll..."
+                                placeholder="Escribe un texto que detenga el scroll..."
                             />
                         </div>
 
                         {/* Style (new) */}
                         <div>
-                            <p className="eyebrow mb-2">Style</p>
+                            <p className="eyebrow mb-2">Estilo</p>
                             <div className="grid grid-cols-3 gap-1.5">
                                 {HOOK_STYLES.map((s) => (
                                     <button
@@ -152,7 +152,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
 
                         {/* Position Control */}
                         <div>
-                            <p className="eyebrow mb-2">Position</p>
+                            <p className="eyebrow mb-2">Posición</p>
                             <SegmentedControl
                                 options={POSITION_OPTIONS}
                                 value={position}
@@ -163,7 +163,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
 
                         {/* Size Control */}
                         <div>
-                            <p className="eyebrow mb-2">Size</p>
+                            <p className="eyebrow mb-2">Tamaño</p>
                             <SegmentedControl
                                 options={SIZE_OPTIONS}
                                 value={size}
@@ -174,7 +174,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
 
                         {/* Entrance Animation (new) */}
                         <div>
-                            <p className="eyebrow mb-2">Entrance</p>
+                            <p className="eyebrow mb-2">Entrada</p>
                             <SegmentedControl
                                 options={ENTRANCE_OPTIONS}
                                 value={entranceAnimation}
@@ -187,7 +187,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                         {/* Display Duration (new) */}
                         <div>
                             <div className="flex items-center justify-between mb-2">
-                                <p className="eyebrow">Duration</p>
+                                <p className="eyebrow">Duración</p>
                                 <span className="readout">{displayDuration}S</span>
                             </div>
                             <input
@@ -205,13 +205,13 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                         </div>
 
                         <div className="p-3 border border-rule rounded-input text-xs text-muted">
-                            Tip: keep it short and punchy. Using "POV:" or specific questions works best for retention.
+                            Consejo: hazlo corto y contundente. Usar "POV:" o preguntas concretas funciona mejor para la retención.
                         </div>
                     </div>
 
                     <div className="flex gap-2 mt-5 shrink-0">
                         <button onClick={onClose} className="btn-ghost">
-                            cancel
+                            cancelar
                         </button>
                         <button
                             onClick={() => onGenerate({
@@ -223,7 +223,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                             className="btn-primary flex-1"
                         >
                             {isProcessing && <Loader2 size={16} className="animate-spin text-brassink" />}
-                            {isProcessing ? 'generating...' : 'add hook'}
+                            {isProcessing ? 'generando...' : 'añadir gancho'}
                         </button>
                     </div>
                 </div>

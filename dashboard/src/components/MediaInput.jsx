@@ -7,24 +7,14 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
-export default function MediaInput({ onProcess, isProcessing, geminiConfigured, llmProvider }) {
+export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
-    const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
-    // Sticky per-browser, not per-video: someone who always records this way
-    // shouldn't have to re-check it on every upload. Off by default — it's a
-    // deliberate opt-in (see screencast_layout.py's own reasoning: blind
-    // detection on arbitrary content hurts as many clips as it fixes).
-    const [screencastLayout, setScreencastLayout] = useState(
-        () => { try { return localStorage.getItem('os_screencast_layout') === '1'; } catch { return false; } });
-    useEffect(() => {
-        try { localStorage.setItem('os_screencast_layout', screencastLayout ? '1' : '0'); } catch { /* ignore */ }
-    }, [screencastLayout]);
     // Advanced generation controls — empty string means "let the AI decide",
     // which keeps the default pipeline behavior untouched.
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -77,12 +67,11 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
             clipMaxSeconds: clipMaxSeconds || null,
-            layouts: screencastLayout ? ['screencast'] : null,
         };
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
+            onProcess({ type: 'url', payload: url, acknowledged: true, ...advanced });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...advanced });
+            onProcess({ type: 'file', payload: file, acknowledged: true, ...advanced });
         }
     };
 
@@ -105,7 +94,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                         }`}
                 >
                     <Upload size={16} className={`hidden sm:block ${mode === 'file' ? 'text-brass' : ''}`} />
-                    Upload File
+                    Subir archivo
                 </button>
                 {youtubeUrlEnabled && (
                     <button
@@ -116,7 +105,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                             }`}
                     >
                         <Link2 size={16} className={`hidden sm:block ${mode === 'url' ? 'text-brass' : ''}`} />
-                        Video URL
+                        URL del vídeo
                     </button>
                 )}
             </div>
@@ -129,7 +118,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                 type="url"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                placeholder="https://... paste a video link"
+                                placeholder="https://... pega el enlace de un vídeo"
                                 className="input-field pr-11"
                                 required
                             />
@@ -137,14 +126,14 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                 <button
                                     type="button"
                                     onClick={() => setShowInfo((v) => !v)}
-                                    aria-label="Supported platforms"
+                                    aria-label="Plataformas compatibles"
                                     className="p-1.5 text-muted hover:text-brass transition-colors"
                                 >
                                     <Info size={16} />
                                 </button>
                                 {showInfo && (
                                     <div className="absolute right-0 top-full mt-2 w-64 z-20 card p-4 text-left animate-fade">
-                                        <p className="eyebrow mb-2">Paste a link from</p>
+                                        <p className="eyebrow mb-2">Pega un enlace de</p>
                                         <div className="flex flex-wrap gap-1.5">
                                             {SUPPORTED_PLATFORMS.map((p) => (
                                                 <span key={p} className="text-xs px-2 py-0.5 rounded-full bg-paper3 text-ink2">
@@ -153,7 +142,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                             ))}
                                         </div>
                                         <p className="text-xs text-muted mt-2.5 leading-relaxed">
-                                            …and 1,000+ more sites. If a link has a public video, we can usually fetch it.
+                                            …y más de 1.000 sitios más. Si el enlace tiene un vídeo público, normalmente podemos obtenerlo.
                                         </p>
                                     </div>
                                 )}
@@ -188,78 +177,26 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                     className="hidden"
                                 />
                                 <Upload className="mx-auto mb-3 text-muted" size={18} />
-                                <p className="text-ink2 lowercase">Click to upload or drag and drop</p>
-                                <p className="readout mt-2">MP4, MOV up to 500MB</p>
+                                <p className="text-ink2 lowercase">Haz clic para subir o arrastra y suelta</p>
+                                <p className="readout mt-2">MP4, MOV hasta 500MB</p>
                             </label>
                         )}
                     </div>
                 )}
 
-                {/* Output format selector */}
-                <div className="mt-5">
-                    <p className="eyebrow mb-2">Output format</p>
-                    <div className="grid grid-cols-3 gap-2">
-                        {[
-                            { value: 'vertical', label: '9:16', hint: 'Shorts · Reels · TikTok', w: 18, h: 32 },
-                            { value: 'square', label: '1:1', hint: 'Feed posts', w: 28, h: 28 },
-                            { value: 'horizontal', label: '16:9', hint: 'Keep landscape · YouTube', w: 36, h: 20 },
-                        ].map((f) => {
-                            const active = outputFormat === f.value;
-                            return (
-                                <button
-                                    key={f.value}
-                                    type="button"
-                                    onClick={() => setOutputFormat(f.value)}
-                                    className={`py-3 px-2 rounded-input border flex flex-col items-center gap-2 transition-colors
-                                        ${active ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
-                                >
-                                    {/* Aspect-ratio glyph */}
-                                    <span
-                                        className="rounded-[3px] border-2 transition-colors"
-                                        style={{
-                                            width: `${f.w}px`,
-                                            height: `${f.h}px`,
-                                            borderColor: active ? 'var(--color-accent)' : 'var(--color-rule-2)',
-                                            backgroundColor: active ? 'color-mix(in srgb, var(--color-accent) 22%, transparent)' : 'transparent',
-                                        }}
-                                    />
-                                    <span className="block font-mono text-sm leading-none">{f.label}</span>
-                                    <span className="block text-[10px] leading-tight text-center text-muted">{f.hint}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                {/* Screencast layout: full-width screen content on top, webcam framed
-                    below — instead of the default face-tracked crop zooming into a
-                    slice of the shared screen. Opt-in, sticky across uploads. */}
-                <div className="mt-4 p-3 rounded-input border border-rule2">
-                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
-                        <input
-                            type="checkbox"
-                            checked={screencastLayout}
-                            onChange={(e) => setScreencastLayout(e.target.checked)}
-                            className="mt-0.5 accent-[var(--color-accent)] cursor-pointer"
-                        />
-                        <span className="text-xs text-ink2">
-                            <span className="text-ink font-medium">Screen recording + webcam</span>{' '}
-                            — keeps the shared screen full width instead of cropping into it, with your
-                            face framed in a band underneath. Turn this on if your videos are tutorials/
-                            screencasts with a webcam bubble, not talking-head footage.
-                        </span>
-                    </label>
-                    {screencastLayout && !geminiConfigured && (
-                        <p className="mt-2 ml-6 text-[11px] text-warn leading-relaxed">
-                            No AI key is configured on this server, so this will silently fall back to normal framing.
-                        </p>
-                    )}
-                    {screencastLayout && geminiConfigured && llmProvider === 'openrouter' && (
-                        <p className="mt-2 ml-6 text-[11px] text-muted leading-relaxed">
-                            Over OpenRouter this samples frames instead of watching the full video, so detection is a
-                            little less precise than with a direct Gemini key — still catches most screen-share segments.
-                        </p>
-                    )}
+                {/* Every clip ships in three formats automatically — no format
+                    picker needed: the vertical face-tracked crop (the one you
+                    edit/re-style), a horizontal version to watch by rotating
+                    the phone, and the whole frame fitted into a vertical canvas
+                    with black bars for a Story/Reel slot where nothing should
+                    be cropped. */}
+                <div className="mt-5 p-3 rounded-input border border-rule2">
+                    <p className="text-xs text-ink2 leading-relaxed">
+                        <span className="text-ink font-medium">Cada clip se genera en 3 formatos</span>{' '}
+                        automáticamente: recorte vertical siguiendo la cara, horizontal
+                        sin tocar (girando el móvil) y vertical con el fotograma completo
+                        encajado con márgenes negros. Sin nada que elegir aquí.
+                    </p>
                 </div>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
@@ -270,7 +207,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                         className="flex items-center gap-1.5 text-xs text-muted hover:text-ink2 lowercase transition-colors"
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
-                        advanced options
+                        opciones avanzadas
                         {(targetClips || clipMinSeconds || clipMaxSeconds) && (
                             <span className="text-brass">·</span>
                         )}
@@ -278,7 +215,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                     {showAdvanced && (
                         <div className="mt-3 grid grid-cols-3 gap-2 animate-fade">
                             <div>
-                                <p className="eyebrow mb-1.5">clips to aim for</p>
+                                <p className="eyebrow mb-1.5">clips objetivo</p>
                                 <input
                                     type="number" min="1" max="15" step="1"
                                     value={targetClips}
@@ -288,7 +225,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                 />
                             </div>
                             <div>
-                                <p className="eyebrow mb-1.5">min length (s)</p>
+                                <p className="eyebrow mb-1.5">duración mín. (s)</p>
                                 <input
                                     type="number" min="5" max="175" step="1"
                                     value={clipMinSeconds}
@@ -298,7 +235,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                 />
                             </div>
                             <div>
-                                <p className="eyebrow mb-1.5">max length (s)</p>
+                                <p className="eyebrow mb-1.5">duración máx. (s)</p>
                                 <input
                                     type="number" min="10" max="180" step="1"
                                     value={clipMaxSeconds}
@@ -308,8 +245,8 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                                 />
                             </div>
                             <p className="col-span-3 text-[11px] leading-relaxed text-muted">
-                                Targets, not guarantees: the AI returns fewer clips when the
-                                material doesn't hold them. Leave blank to let it decide.
+                                Son objetivos, no garantías: la IA devuelve menos clips cuando el
+                                material no da para más. Déjalo en blanco para que decida ella.
                             </p>
                         </div>
                     )}
@@ -323,7 +260,7 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                         className="mt-0.5 accent-[var(--color-accent)] cursor-pointer"
                     />
                     <span>
-                        I confirm I own this content or have the rights to process it. I am responsible for any content I submit. See our <a href="/#legal" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Terms & Privacy</a>.
+                        Confirmo que soy propietario/a de este contenido o tengo los derechos para procesarlo. Soy responsable de cualquier contenido que envíe. Consulta nuestros <a href="/#legal" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Términos y privacidad</a>.
                     </span>
                 </label>
 
@@ -335,11 +272,11 @@ export default function MediaInput({ onProcess, isProcessing, geminiConfigured, 
                     {isProcessing ? (
                         <>
                             <Loader2 size={16} className="animate-spin" />
-                            Processing Video...
+                            Procesando vídeo...
                         </>
                     ) : (
                         <>
-                            Generate Clips
+                            Generar clips
                         </>
                     )}
                 </button>

@@ -45,6 +45,24 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
     const originalVideoUrl = getApiUrl((clip.video_url || '').replace(/[^/]+$/, stripBurns((clip.video_url || '').split('/').pop())));
     const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clip.video_url));
 
+    // Shared by the main "descargar" button and the two extra-format links
+    // below — same blob-fetch approach so all three behave identically
+    // across browsers instead of relying on a same-origin <a download>.
+    const downloadUrl = async (url, filename) => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Download failed');
+        const blob = await response.blob();
+        const objectUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(objectUrl);
+        document.body.removeChild(a);
+    };
+
     const downloadClip = async () => {
         try {
             const response = await fetch(currentVideoUrl);
@@ -454,8 +472,8 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                 {isEditing && (
                     <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 p-4 text-center">
                         <Loader2 size={28} className="text-brass animate-spin mb-3" />
-                        <span className="text-xs text-ink lowercase">ai magic in progress…</span>
-                        <span className="readout mt-1.5">APPLYING VIRAL EDITS · ZOOMS</span>
+                        <span className="text-xs text-ink lowercase">magia de la IA en progreso…</span>
+                        <span className="readout mt-1.5">APLICANDO EDICIONES VIRALES · ZOOMS</span>
                     </div>
                 )}
             </div>
@@ -464,7 +482,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
             <div className="flex-1 p-4 md:p-5 flex flex-col overflow-hidden min-w-0">
                 <div className="mb-4">
                     <h3 className="text-base font-medium text-ink leading-tight line-clamp-2 mb-2 break-words" title={clip.video_title_for_youtube_short}>
-                        {clip.video_title_for_youtube_short || "Viral Clip Generated"}
+                        {clip.video_title_for_youtube_short || "Clip viral generado"}
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
@@ -479,11 +497,11 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                     <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0">
                         <span className="eyebrow shrink-0">YOUTUBE</span>
                         <p className="text-xs text-ink2 truncate flex-1 min-w-0">
-                            {clip.video_title_for_youtube_short || "Viral Short Video"}
+                            {clip.video_title_for_youtube_short || "Vídeo corto viral"}
                         </p>
                         <button
-                            onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Viral Short Video")}
-                            aria-label="copy youtube title"
+                            onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Vídeo corto viral")}
+                            aria-label="copiar título de youtube"
                             className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                         >
                             {copied === 'youtube' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
@@ -497,7 +515,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         </p>
                         <button
                             onClick={() => handleCopy('caption', clip.video_description_for_tiktok || clip.video_description_for_instagram)}
-                            aria-label="copy caption"
+                            aria-label="copiar descripción"
                             className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                         >
                             {copied === 'caption' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
@@ -508,7 +526,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         onClick={() => setShowDescModal(true)}
                         className="w-full flex items-center justify-center gap-2 py-2 rounded-input border border-dashed border-rule text-xs lowercase text-muted hover:text-brass hover:border-rule2 transition-colors"
                     >
-                        <FileText size={14} /> view descriptions
+                        <FileText size={14} /> ver descripciones
                     </button>
                 </div>
 
@@ -528,7 +546,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                             className={QUIET_BTN}
                         >
                             <Scissors size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-                            edit clip
+                            editar clip
                         </button>
                     )}
 
@@ -538,7 +556,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                             className={QUIET_BTN}
                         >
                             <Crosshair size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-                            reframing
+                            reencuadrar
                         </button>
                     )}
 
@@ -548,7 +566,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         className={QUIET_BTN}
                     >
                         {isEditing ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isEditing ? 'editing…' : 'auto edit'}
+                        {isEditing ? 'editando…' : 'auto editar'}
                     </button>
 
                     <button
@@ -557,7 +575,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         className={QUIET_BTN}
                     >
                         {isSubtitling ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Type size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isSubtitling ? 'adding…' : 'subtitles'}
+                        {isSubtitling ? 'añadiendo…' : 'subtítulos'}
                     </button>
 
                     <button
@@ -566,7 +584,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         className={QUIET_BTN}
                     >
                         {isHooking ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isHooking ? 'adding…' : 'viral hook'}
+                        {isHooking ? 'añadiendo…' : 'gancho viral'}
                     </button>
 
                     <button
@@ -582,42 +600,70 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         }}
                         className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
-                        <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> download
+                        <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> descargar
                     </button>
                 </div>
+
+                {/* The other two formats every clip ships in alongside the
+                    vertical crop above — plain downloads, no preview/editing
+                    for these (they're a straight render of the same cut, not
+                    something to re-style). Omitted for clips from before this
+                    shipped, which only ever rendered the one format. */}
+                {(clip.video_url_horizontal || clip.video_url_letterboxed) && (
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                        {clip.video_url_horizontal && (
+                            <button
+                                onClick={() => downloadUrl(getApiUrl(clip.video_url_horizontal), `clip-${index + 1}-horizontal.mp4`)}
+                                className={QUIET_BTN}
+                            >
+                                <Download size={14} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                                horizontal 16:9
+                            </button>
+                        )}
+                        {clip.video_url_letterboxed && (
+                            <button
+                                onClick={() => downloadUrl(getApiUrl(clip.video_url_letterboxed), `clip-${index + 1}-encajado.mp4`)}
+                                className={QUIET_BTN}
+                            >
+                                <Download size={14} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                                encajado 9:16
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Descriptions Modal */}
             <Modal
                 isOpen={showDescModal}
                 onClose={() => setShowDescModal(false)}
-                eyebrow="GENERATED COPY"
-                title="descriptions"
+                eyebrow="TEXTOS GENERADOS"
+                title="descripciones"
                 size="md"
             >
                 <div className="space-y-4">
                     <div>
                         <div className="flex items-center justify-between gap-2 mb-1.5">
-                            <label className="eyebrow">YOUTUBE TITLE</label>
+                            <label className="eyebrow">TÍTULO DE YOUTUBE</label>
                             <button
-                                onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Viral Short Video")}
-                                aria-label="copy youtube title"
+                                onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Vídeo corto viral")}
+                                aria-label="copiar título de youtube"
                                 className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                             >
                                 {copied === 'youtube' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
                             </button>
                         </div>
                         <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule">
-                            {clip.video_title_for_youtube_short || "Viral Short Video"}
+                            {clip.video_title_for_youtube_short || "Vídeo corto viral"}
                         </p>
                     </div>
 
                     <div>
                         <div className="flex items-center justify-between gap-2 mb-1.5">
-                            <label className="eyebrow">TIKTOK · IG CAPTION</label>
+                            <label className="eyebrow">DESCRIPCIÓN TIKTOK · IG</label>
                             <button
                                 onClick={() => handleCopy('caption', clip.video_description_for_tiktok || clip.video_description_for_instagram)}
-                                aria-label="copy caption"
+                                aria-label="copiar descripción"
                                 className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                             >
                                 {copied === 'caption' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}

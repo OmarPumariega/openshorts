@@ -4,7 +4,7 @@ export const REPO_URL = 'https://github.com/mutonby/openshorts';
 
 // Small "star us" ask, placed at high-delight moments (clips just rendered)
 // and at the free-plan ceiling (out-of-minutes modal). No incentive attached.
-export default function StarBanner({ message = 'Enjoying OpenShorts?' }) {
+export default function StarBanner({ message = '¿Disfrutando la herramienta?' }) {
   return (
     <a
       href={REPO_URL}
@@ -13,7 +13,7 @@ export default function StarBanner({ message = 'Enjoying OpenShorts?' }) {
       className="flex items-center gap-2 px-3 py-2 rounded-input bg-paper3 border border-rule text-sm text-muted hover:text-ink transition-colors"
     >
       <Github size={14} className="shrink-0" />
-      <span>{message} <span className="text-brass">Star us on GitHub ⭐</span></span>
+      <span>{message} <span className="text-brass">Danos una estrella en GitHub ⭐</span></span>
     </a>
   );
 }
