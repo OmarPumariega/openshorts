@@ -1089,24 +1089,35 @@ function App() {
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
-                      {results.clips.map((clip, i) => (
-                        <ResultCard
-                          key={`${jobId}-${i}-${clip.video_url || ''}`}
-                          clip={clip}
-                          index={i}
-                          jobId={jobId}
-                          onEditClip={(index) => setEditingClip(index)}
-                          onReframeClip={(index) => setReframingClip(index)}
-                          initialState={projectState?.clips?.find((c) => c.index === i) || null}
-                          onStateChange={handleClipStateChange}
-                          durableUrl={durableClips[i]}
-                          isManaged={isManaged}
-                          onPlay={(time) => handleClipPlay(time)}
-                          onPause={handleClipPause}
-                          onBulkSubtitle={handleBulkSubtitles}
-                          clipCount={results.clips.length}
-                          bulkProgress={bulkSub}
-                        />
+                      {/* Each detected clip ships in three formats — a card
+                          per format that actually rendered, "Clip N.1/N.2/N.3"
+                          (vertical / girar móvil / encajado). Only the vertical
+                          crop carries recut/reframe/auto-edit/session-restore:
+                          those are all tied to the face-tracking reframe engine,
+                          which the other two formats never run. */}
+                      {results.clips.flatMap((clip, i) => (
+                        FORMATS
+                          .filter((f) => f.id === 'vertical' || clip[urlFieldFor(f.id)])
+                          .map((f) => (
+                            <ResultCard
+                              key={`${jobId}-${i}-${f.id}-${clip[urlFieldFor(f.id)] || ''}`}
+                              clip={clip}
+                              index={i}
+                              format={f.id}
+                              jobId={jobId}
+                              onEditClip={f.id === 'vertical' ? (index) => setEditingClip(index) : undefined}
+                              onReframeClip={f.id === 'vertical' ? (index) => setReframingClip(index) : undefined}
+                              initialState={f.id === 'vertical' ? (projectState?.clips?.find((c) => c.index === i) || null) : null}
+                              onStateChange={f.id === 'vertical' ? handleClipStateChange : undefined}
+                              durableUrl={f.id === 'vertical' ? durableClips[i] : undefined}
+                              isManaged={isManaged}
+                              onPlay={f.id === 'vertical' ? (time) => handleClipPlay(time) : undefined}
+                              onPause={f.id === 'vertical' ? handleClipPause : undefined}
+                              onBulkSubtitle={(options) => handleBulkSubtitles(options, jobId, results.clips, false, f.id)}
+                              clipCount={results.clips.length}
+                              bulkProgress={bulkSub}
+                            />
+                          ))
                       ))}
                     </div>
                   ) : (

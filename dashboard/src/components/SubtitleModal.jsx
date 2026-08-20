@@ -28,11 +28,14 @@ const swatchClass = (selected) =>
         ? 'ring-2 ring-[color:var(--color-accent)] ring-offset-2 ring-offset-[color:var(--color-paper-2)]'
         : 'ring-1 ring-[color:var(--color-rule-2)] hover:ring-[color:var(--color-accent)]'}`;
 
-export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
-    // Start from the user's saved default profile (Settings > Default
-    // subtitle style) when one exists, so per-clip editing begins from their
-    // baseline instead of the generic factory look every time.
-    const initial = loadDefaultStyle() || FACTORY_DEFAULT_STYLE;
+export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress, format = 'vertical' }) {
+    // Start from the user's saved default profile for THIS delivery format
+    // (Settings > Default subtitle style has one per format — vertical /
+    // girar móvil / encajado — since a look tuned for the tight face crop
+    // doesn't suit the same clip letterboxed full-frame) when one exists, so
+    // per-clip editing begins from that baseline instead of the generic
+    // factory look every time.
+    const initial = loadDefaultStyle(format) || FACTORY_DEFAULT_STYLE;
 
     const [position, setPosition] = useState(initial.position);
     const [fontSize, setFontSize] = useState(initial.fontSize);
@@ -372,14 +375,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         position, fontSize, fontName, fontColor, highlightColor,
                                         borderColor, borderWidth, bgColor, bgOpacity,
                                         style, effect, baseOpacity, uppercase, presetId: activePreset,
-                                    });
+                                    }, format);
                                     setDefaultSaved(true);
                                     setTimeout(() => setDefaultSaved(false), 2000);
                                 }}
                                 className="mt-2 w-full text-xs text-muted hover:text-brass transition-colors flex items-center justify-center gap-1.5 py-1"
-                                title="Usa este estilo para todos los vídeos nuevos a partir de ahora (Ajustes > Estilo de subtítulos por defecto)"
+                                title="Usa este estilo para todos los clips nuevos en este formato a partir de ahora (Ajustes > Estilo de subtítulos por defecto)"
                             >
-                                {defaultSaved ? '✓ guardado como mi estilo por defecto' : 'guardar como mi estilo por defecto'}
+                                {defaultSaved ? '✓ guardado como estilo por defecto de este formato' : 'guardar como estilo por defecto de este formato'}
                             </button>
                             {style === 'karaoke' && (
                                 <div className="mt-3 space-y-3 animate-fade">

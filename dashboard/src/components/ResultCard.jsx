@@ -27,14 +27,36 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, onEditClip = null, onReframeClip = null }) {
+// vertical: video_url, the face-tracked crop — the only format that existed
+// before clips shipped in three, and the only one with recut/reframe/auto-
+// edit wired up server-side (those are all tied to the face-tracking reframe
+// engine, which the other two formats never go through). horizontal: the
+// "girar móvil" 9:16-file-rotated-content format. letterboxed: whole frame
+// fitted with black bars.
+const URL_FIELD = {
+    vertical: 'video_url',
+    horizontal: 'video_url_horizontal',
+    letterboxed: 'video_url_letterboxed',
+};
+const FORMAT_LABEL = {
+    vertical: 'vertical',
+    horizontal: 'girar móvil',
+    letterboxed: 'encajado',
+};
+// "Clip 1.1 / 1.2 / 1.3" per the user's own naming — one sub-number per
+// format, in the fixed order every clip renders them.
+const FORMAT_SUBINDEX = { vertical: 1, horizontal: 2, letterboxed: 3 };
+
+export default function ResultCard({ clip, index, jobId, format = 'vertical', durableUrl, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, onEditClip = null, onReframeClip = null }) {
+    const urlField = URL_FIELD[format] || 'video_url';
+    const clipUrl = clip[urlField];
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
-    // clip.video_url mutates after server edits. Used as the compositing base
+    // the clip's url mutates after server edits. Used as the compositing base
     // for the Remotion preview so it never stacks subtitles over an already-
     // subtitled file (double-subtitle bug).
     const stripBurns = (filename) => {
@@ -42,28 +64,15 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
         do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
         return f;
     };
-    const originalVideoUrl = getApiUrl((clip.video_url || '').replace(/[^/]+$/, stripBurns((clip.video_url || '').split('/').pop())));
-    const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clip.video_url));
+    const originalVideoUrl = getApiUrl((clipUrl || '').replace(/[^/]+$/, stripBurns((clipUrl || '').split('/').pop())));
+    const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clipUrl));
 
-    // Shared by the main "descargar" button and the two extra-format links
-    // below — same blob-fetch approach so all three behave identically
-    // across browsers instead of relying on a same-origin <a download>.
-    const downloadUrl = async (url, filename) => {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('Download failed');
-        const blob = await response.blob();
-        const objectUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = objectUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(objectUrl);
-        document.body.removeChild(a);
-    };
-
+    // clip-1.mp4 for the vertical crop (unchanged filename — it's the format
+    // that existed before this shipped), clip-1-horizontal.mp4 / clip-1-
+    // letterboxed.mp4 for the other two, so three downloads of the same clip
+    // never collide in a Downloads folder.
     const downloadClip = async () => {
+        const suffix = format === 'vertical' ? '' : `-${format}`;
         try {
             const response = await fetch(currentVideoUrl);
             if (!response.ok) throw new Error('Download failed');
@@ -72,7 +81,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
             const a = document.createElement('a');
             a.style.display = 'none';
             a.href = url;
-            a.download = `clip-${index + 1}.mp4`;
+            a.download = `clip-${index + 1}${suffix}.mp4`;
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
@@ -86,7 +95,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
     // All server-side operations must chain from this, so burned-in edits
     // (subtitles, hooks, effects) never get silently dropped.
     // A reopened project seeds it from the persisted project state.
-    const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
+    const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clipUrl || '').split('/').pop());
     const [videoErrored, setVideoErrored] = useState(false);
     const [resolution, setResolution] = useState(null);
 
@@ -103,15 +112,15 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
     // subtitles applied from another card), adopt it so the card shows the
     // freshly subtitled video instead of a stale one.
     useEffect(() => {
-        const serverUrl = getApiUrl(clip.video_url);
-        const serverName = (clip.video_url || '').split('/').pop();
+        const serverUrl = getApiUrl(clipUrl);
+        const serverName = (clipUrl || '').split('/').pop();
         if (serverName && serverName !== serverVideoFile) {
             setServerVideoFile(serverName);
             setCurrentVideoUrl(serverUrl);
             if (videoRef.current) videoRef.current.load();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [clip.video_url]);
+    }, [clipUrl]);
 
     const [copied, setCopied] = useState(null);
 
@@ -464,7 +473,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                 />
                 <div className="absolute top-3 left-3 flex gap-2">
                     <span className="bg-black/70 text-ink font-mono text-micro uppercase px-2 py-1 rounded-full">
-                        Clip {index + 1}
+                        Clip {index + 1}.{FORMAT_SUBINDEX[format] || 1} · {FORMAT_LABEL[format] || format}
                     </span>
                 </div>
 
@@ -560,14 +569,19 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                         </button>
                     )}
 
-                    <button
-                        onClick={handleAutoEdit}
-                        disabled={isEditing}
-                        className={QUIET_BTN}
-                    >
-                        {isEditing ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isEditing ? 'editando…' : 'auto editar'}
-                    </button>
+                    {/* AI zooms/pans read the reframe engine's per-scene face-
+                        tracking data, which only the vertical crop has — the
+                        other two formats never run that engine at all. */}
+                    {format === 'vertical' && (
+                        <button
+                            onClick={handleAutoEdit}
+                            disabled={isEditing}
+                            className={QUIET_BTN}
+                        >
+                            {isEditing ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                            {isEditing ? 'editando…' : 'auto editar'}
+                        </button>
+                    )}
 
                     <button
                         onClick={() => setShowSubtitleModal(true)}
@@ -604,33 +618,6 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                     </button>
                 </div>
 
-                {/* The other two formats every clip ships in alongside the
-                    vertical crop above — plain downloads, no preview/editing
-                    for these (they're a straight render of the same cut, not
-                    something to re-style). Omitted for clips from before this
-                    shipped, which only ever rendered the one format. */}
-                {(clip.video_url_horizontal || clip.video_url_letterboxed) && (
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                        {clip.video_url_horizontal && (
-                            <button
-                                onClick={() => downloadUrl(getApiUrl(clip.video_url_horizontal), `clip-${index + 1}-horizontal.mp4`)}
-                                className={QUIET_BTN}
-                            >
-                                <Download size={14} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-girar móvil
-                            </button>
-                        )}
-                        {clip.video_url_letterboxed && (
-                            <button
-                                onClick={() => downloadUrl(getApiUrl(clip.video_url_letterboxed), `clip-${index + 1}-encajado.mp4`)}
-                                className={QUIET_BTN}
-                            >
-                                <Download size={14} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-                                encajado 9:16
-                            </button>
-                        )}
-                    </div>
-                )}
             </div>
 
             {/* Descriptions Modal */}
@@ -692,6 +679,7 @@ girar móvil
                 jobId={jobId}
                 clipIndex={index}
                 existingHook={activeLayers.hook}
+                format={format}
             />
 
             <HookModal
