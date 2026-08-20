@@ -5,6 +5,8 @@ import subprocess
 import argparse
 import re
 import sys
+import shutil
+import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -822,6 +824,20 @@ def render_rotate_to_landscape(input_video, final_output_video):
     transpose=1 (90° clockwise — flipped from the original transpose=2 per
     user feedback: the first cut had it rotated the wrong way, and clockwise
     is the "totally opposite" direction they asked for).
+
+    IMPORTANT for anything drawn onto the frame (captions, watermark, hook
+    text): this must run AFTER whatever's being overlaid, not before. Burning
+    an overlay onto the ALREADY-rotated 9:16 file positions and orients it
+    for that frame's own (rotated) geometry, not the source's — a caption
+    burned at "bottom" of the rotated frame lands on the source's RIGHT edge
+    (clockwise rotation maps new_bottom -> old_right, new_left -> old_bottom,
+    new_top -> old_left, new_right -> old_top), and reads sideways once a
+    player rotates its display back to compensate, since the text itself
+    never got the same rotation the video content did. Overlay onto the
+    source in its native orientation first, THEN rotate the composited
+    result through this function — text and picture turn together as one
+    image and both land correctly. See _process_one_clip's "_horizontal"
+    handling for the caption case.
     """
     if os.path.exists(final_output_video):
         os.remove(final_output_video)
@@ -833,6 +849,62 @@ def render_rotate_to_landscape(input_video, final_output_video):
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
     print(f"✅ Clip saved to {final_output_video}")
+    return True
+
+
+def _process_rotated_format(i, clip_temp_path, output_dir, video_title, transcript, start, end):
+    """The "girar móvil" format's own render+caption handling — pulled out of
+    _process_one_clip's generic variants loop because this is the one format
+    where captioning can't just happen after the render (see render_rotate_
+    to_landscape's docstring).
+
+    Produces the same pair of files the other two formats get from the
+    generic loop: a clean rotated ``..._horizontal.mp4`` (what a restyle or
+    "remove captions" chains from) and, alongside it, a captioned
+    ``subtitled_<ts>_..._horizontal.mp4`` — except the caption pass here runs
+    on the SOURCE clip while it's still in its native orientation, and only
+    the already-composited result gets rotated, so text and picture turn
+    together and land in the right place.
+
+    The intermediate captioned-but-unrotated file is built in a throwaway
+    temp directory, never inside output_dir: auto_caption_clip names its
+    output from clip_temp_path's own basename ("temp_<title>_clip_<n>.mp4"),
+    and that name is a substring match for the SAME glob patterns app.py
+    uses to resolve the vertical crop's current file (`subtitled_*_<title>_
+    clip_<n>.mp4` — the `*` swallows "<ts>_temp" just fine). Landing it in
+    output_dir even briefly risks a concurrent request resolving to this
+    throwaway instead of the real vertical clip.
+    """
+    clean_path = os.path.join(output_dir, f"{video_title}_clip_{i+1}_horizontal.mp4")
+    try:
+        if not render_rotate_to_landscape(clip_temp_path, clean_path):
+            return False
+    except Exception as e:
+        print(f"   ⚠️ _horizontal format failed ({type(e).__name__}: {e}) — "
+              f"skipping it, the other formats still ship.")
+        return False
+
+    if os.environ.get("WATERMARK") == "1":
+        apply_watermark(clean_path)
+    print(f"   ✅ Clip {i+1}_horizontal ready: {clean_path}")
+
+    work_dir = tempfile.mkdtemp(prefix="rotate_caption_")
+    try:
+        source_copy = os.path.join(work_dir, os.path.basename(clip_temp_path))
+        shutil.copy2(clip_temp_path, source_copy)
+        captioned = auto_caption_clip(source_copy, transcript, start, end)
+        if not captioned:
+            return True  # clean rotated file still shipped; captions just skipped
+        generation_id = int(time.time())
+        subtitled_path = os.path.join(
+            output_dir, f"subtitled_{generation_id}_{video_title}_clip_{i+1}_horizontal.mp4")
+        render_rotate_to_landscape(captioned, subtitled_path)
+        print(f"   💬 Captions burned: {os.path.basename(subtitled_path)}")
+    except Exception as e:
+        print(f"   ⚠️ Captions failed for _horizontal ({type(e).__name__}: {e}) — "
+              f"delivering that format without them.")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
     return True
 
 
@@ -1708,11 +1780,17 @@ if __name__ == '__main__':
                     # like a Story). Only the crop goes through the heavier
                     # face-tracking reframe engine; the other two are a single
                     # cheap ffmpeg pass each.
+                    #
+                    # The rotated format is NOT in this generic list: it needs
+                    # captions burned BEFORE the rotation, not after (see
+                    # render_rotate_to_landscape's docstring for why — the
+                    # short version is that captions burned onto the already-
+                    # rotated frame land on the wrong edge and read sideways),
+                    # so it gets its own handling below instead.
                     variants = [
                         ("", lambda out: render_clip(
                             clip_temp_path, out, output_format,
                             content_ranges=_content_ranges_for_clip(start, end))),
-                        ("_horizontal", lambda out: render_rotate_to_landscape(clip_temp_path, out)),
                         ("_letterboxed", lambda out: render_letterbox_fit(clip_temp_path, out)),
                     ]
 
@@ -1736,6 +1814,10 @@ if __name__ == '__main__':
                         # the canonical file stays clean for re-styling.
                         auto_caption_clip(variant_path, transcript, start, end)
                         print(f"   ✅ Clip {i+1}{suffix} ready: {variant_path}")
+
+                    if _process_rotated_format(i, clip_temp_path, output_dir, video_title,
+                                               transcript, start, end):
+                        any_success = True
                     return any_success
                 finally:
                     if os.path.exists(clip_temp_path):
