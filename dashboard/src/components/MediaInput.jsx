@@ -193,9 +193,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <div className="mt-5 p-3 rounded-input border border-rule2">
                     <p className="text-xs text-ink2 leading-relaxed">
                         <span className="text-ink font-medium">Cada clip se genera en 3 formatos</span>{' '}
-                        automáticamente: recorte vertical siguiendo la cara, horizontal
-                        sin tocar (girando el móvil) y vertical con el fotograma completo
-                        encajado con márgenes negros. Sin nada que elegir aquí.
+                        automáticamente: recorte vertical siguiendo la cara, un short 9:16 con el
+                        vídeo girado (para verlo hay que girar el móvil) y vertical con el fotograma
+                        completo encajado con márgenes negros. Sin nada que elegir aquí.
                     </p>
                 </div>
 

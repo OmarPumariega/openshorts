@@ -6,7 +6,24 @@
 // Persisted in localStorage, not the server: this is a private, single-user
 // instance with no account system, and a caption look is not a secret —
 // unlike the Gemini key, there is no reason to keep it out of the browser.
-const STORAGE_KEY = 'openshorts_default_style';
+//
+// One profile per delivery FORMAT (vertical crop / "girar móvil" / vertical
+// letterbox fit), not one shared profile for all three: a look tuned for a
+// tight face-tracked crop (say, large text near the bottom third) can sit
+// right on top of the presenter's face once the same clip is the whole
+// 16:9 frame shrunk into a letterboxed band. 'vertical' keeps the ORIGINAL,
+// unsuffixed key so anyone who already had a default style saved doesn't
+// lose it when this shipped.
+const STORAGE_KEYS = {
+    vertical: 'openshorts_default_style',
+    horizontal: 'openshorts_default_style_horizontal',
+    letterboxed: 'openshorts_default_style_letterboxed',
+};
+export const FORMATS = [
+    { id: 'vertical', label: 'Vertical (recorte)' },
+    { id: 'horizontal', label: 'Girar móvil (9:16 girado)' },
+    { id: 'letterboxed', label: 'Vertical encajado' },
+];
 const CUSTOM_PRESETS_KEY = 'openshorts_custom_presets';
 
 export const FONT_OPTIONS = [
@@ -92,31 +109,37 @@ export function presetToStyle(preset) {
     };
 }
 
-// Returns the saved profile, or null if the user has never set one — callers
-// decide what "no profile saved" means (SubtitleModal falls back to the
-// factory default; App.jsx's auto-apply skips entirely rather than burning
-// captions twice with a style nobody asked for).
-export function loadDefaultStyle() {
+// Returns the saved profile for one format, or null if the user has never
+// set one — callers decide what "no profile saved" means (SubtitleModal
+// falls back to the factory default; App.jsx's auto-apply skips that format
+// entirely rather than burning captions twice with a style nobody asked for).
+export function loadDefaultStyle(format = 'vertical') {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = localStorage.getItem(STORAGE_KEYS[format] || STORAGE_KEYS.vertical);
         return raw ? { ...FACTORY_DEFAULT_STYLE, ...JSON.parse(raw) } : null;
     } catch {
         return null;
     }
 }
 
-export function saveDefaultStyle(style) {
+export function saveDefaultStyle(style, format = 'vertical') {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(style));
+        localStorage.setItem(STORAGE_KEYS[format] || STORAGE_KEYS.vertical, JSON.stringify(style));
     } catch {
         // localStorage full/unavailable — the profile just won't persist.
     }
 }
 
-export function clearDefaultStyle() {
+export function clearDefaultStyle(format = 'vertical') {
     try {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STORAGE_KEYS[format] || STORAGE_KEYS.vertical);
     } catch { /* ignore */ }
+}
+
+// {vertical, horizontal, letterboxed} -> saved profile | null, for callers
+// that need all three at once (App.jsx's auto-apply loop).
+export function loadAllDefaultStyles() {
+    return Object.fromEntries(FORMATS.map((f) => [f.id, loadDefaultStyle(f.id)]));
 }
 
 // User-created caption looks (named, saved from the current editor state) —

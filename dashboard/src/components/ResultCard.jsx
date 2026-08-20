@@ -617,7 +617,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, isManaged, 
                                 className={QUIET_BTN}
                             >
                                 <Download size={14} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-                                horizontal 16:9
+girar móvil
                             </button>
                         )}
                         {clip.video_url_letterboxed && (

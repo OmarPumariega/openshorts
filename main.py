@@ -790,7 +790,9 @@ Technical Details: {str(last_err)}
     return downloaded_file, sanitized_title
 
 def finalize_clip_passthrough(input_video, final_output_video):
-    """Keep the clip's native framing (for horizontal/16:9 output).
+    """Keep the clip's native framing (true 16:9 file — the clip editor's
+    'horizontal' output_format choice, unrelated to the "rotate your phone"
+    delivery format below despite the similar name).
 
     The input is the freshly encoded cut, so a stream-copy remux is enough to
     add +faststart — re-encoding here would only cost time and quality.
@@ -801,6 +803,32 @@ def finalize_clip_passthrough(input_video, final_output_video):
     cmd = [
         'ffmpeg', '-y', '-i', input_video,
         '-c', 'copy', *METADATA_SCRUB, '-movflags', '+faststart',
+        final_output_video,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    print(f"✅ Clip saved to {final_output_video}")
+    return True
+
+
+def render_rotate_to_landscape(input_video, final_output_video):
+    """The "turn your phone" delivery format: the FILE is 9:16 — a normal
+    short as every platform's upload flow expects, no separate landscape
+    slot to pick — but its content is the source rotated 90°, so watching it
+    upright means physically rotating the phone to landscape. A 16:9 source
+    rotated a quarter turn IS a 9:16 frame already (1920x1080 -> 1080x1920),
+    so there's no separate crop or pad step: the rotation alone produces the
+    right container shape.
+
+    transpose=2 (90° counter-clockwise). Whichever direction is "wrong" is a
+    one-line fix (transpose=1 for clockwise instead) — there's no functional
+    difference, just which way the viewer's wrist turns.
+    """
+    if os.path.exists(final_output_video):
+        os.remove(final_output_video)
+    print(f"🎬 Rotate to landscape (9:16 file, sideways content): {input_video}")
+    cmd = [
+        'ffmpeg', '-y', '-i', input_video, '-vf', 'transpose=2',
+        *video_encode_args(QUALITY_FAST), *audio_encode_args(),
         final_output_video,
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
@@ -1671,18 +1699,20 @@ if __name__ == '__main__':
 
                     # Every clip ships in three formats from the same cut: the
                     # face-tracked vertical crop (the default, the one that's
-                    # editable/re-styleable from the UI), a horizontal
-                    # passthrough (rotate the phone, watch it framed exactly
-                    # as the source was), and a vertical letterbox fit (the
-                    # whole frame shrunk to fit, black bars — for a slot where
-                    # nothing may be cropped, like a Story). Only the crop
-                    # goes through the heavier face-tracking reframe engine;
-                    # the other two are a single cheap ffmpeg pass each.
+                    # editable/re-styleable from the UI), a "turn your phone"
+                    # 9:16 FILE with the source rotated sideways inside it (so
+                    # it uploads as a normal short — no separate landscape
+                    # slot — but reads correctly only in landscape), and a
+                    # vertical letterbox fit (the whole frame shrunk to fit,
+                    # black bars — for a slot where nothing may be cropped,
+                    # like a Story). Only the crop goes through the heavier
+                    # face-tracking reframe engine; the other two are a single
+                    # cheap ffmpeg pass each.
                     variants = [
                         ("", lambda out: render_clip(
                             clip_temp_path, out, output_format,
                             content_ranges=_content_ranges_for_clip(start, end))),
-                        ("_horizontal", lambda out: finalize_clip_passthrough(clip_temp_path, out)),
+                        ("_horizontal", lambda out: render_rotate_to_landscape(clip_temp_path, out)),
                         ("_letterboxed", lambda out: render_letterbox_fit(clip_temp_path, out)),
                     ]
 

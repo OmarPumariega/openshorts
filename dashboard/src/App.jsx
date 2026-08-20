@@ -18,7 +18,7 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
-import { loadDefaultStyle, saveDefaultStyle, clearDefaultStyle } from './lib/subtitleStyle';
+import { loadAllDefaultStyles, saveDefaultStyle, clearDefaultStyle, FORMATS } from './lib/subtitleStyle';
 import DefaultStyleEditor from './components/DefaultStyleEditor';
 import { loadJobList, saveJobList, titleFor, loadAutoStyledJobs, markJobAutoStyled } from './lib/jobList';
 import JobSwitcher from './components/JobSwitcher';
@@ -57,14 +57,18 @@ function App() {
   // the ephemeral local /videos/ files have been cleaned up (e.g. after a reload).
   const [durableClips, setDurableClips] = useState({});
   const [showKeyModal, setShowKeyModal] = useState(false);
-  // User's saved default subtitle style (Settings > Default subtitle style,
-  // or "save as my default style" inside any clip's subtitle editor). null =
-  // no profile saved, new videos keep the server's factory-default look.
-  const [defaultStyle, _setDefaultStyleState] = useState(() => loadDefaultStyle());
-  const setDefaultStyle = (styleOrNull) => {
-    _setDefaultStyleState(styleOrNull);
-    if (styleOrNull) saveDefaultStyle(styleOrNull);
-    else clearDefaultStyle();
+  // User's saved default subtitle style, ONE PER DELIVERY FORMAT (Settings >
+  // Default subtitle style, or "save as my default style" inside any clip's
+  // subtitle editor). {vertical, horizontal, letterboxed} -> profile | null;
+  // null means that format keeps the server's factory-default look. Formats
+  // style independently on purpose — see subtitleStyle.js's module docstring
+  // for why a look tuned for the tight face crop doesn't suit the letterboxed
+  // whole-frame version of the same clip.
+  const [defaultStyles, _setDefaultStylesState] = useState(() => loadAllDefaultStyles());
+  const setDefaultStyleFor = (format, styleOrNull) => {
+    _setDefaultStylesState((prev) => ({ ...prev, [format]: styleOrNull }));
+    if (styleOrNull) saveDefaultStyle(styleOrNull, format);
+    else clearDefaultStyle(format);
   };
   // Two-layer guard against auto-applying the default style twice (see
   // lib/jobList.js for the duplicate-subtitle-burn bug this fixes):
@@ -125,6 +129,9 @@ function App() {
   const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
+  // Which format's default-style editor is showing in Settings — purely a
+  // local UI selector, not persisted (defaultStyles itself is, per format).
+  const [settingsStyleFormat, setSettingsStyleFormat] = useState('vertical');
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
@@ -238,22 +245,41 @@ function App() {
   //
   // skipAlreadyStyled makes the loop resumable: if a previous run got cut off
   // partway (tab closed mid-job — this is a real thing that happened, see
-  // lib/jobList.js's markJobAutoStyled), clips whose video_url already has a
+  // lib/jobList.js's markJobAutoStyled), clips whose video url already has a
   // "subtitled_" prefix are left alone instead of re-burned, and the loop
   // only spends time on the ones that actually still need it. Only used for
   // the automatic default-style path — the manual "apply to all" button in
   // the subtitle editor always re-applies everything, since the user may be
   // deliberately switching an already-styled clip to a different look.
-  const handleBulkSubtitles = async (options, targetJobId = jobId, targetClips = results?.clips, skipAlreadyStyled = false) => {
+  //
+  // ``format`` picks which of a clip's three rendered files this styles —
+  // 'vertical' (video_url, the default and the only one that existed before
+  // clips shipped in three formats), 'horizontal' (video_url_horizontal,
+  // the "turn your phone" 9:16-file-rotated-content format) or
+  // 'letterboxed' (video_url_letterboxed). The backend infers which field to
+  // write the result back to from the input filename's own suffix, so this
+  // only has to pick the right SOURCE field going in.
+  const urlFieldFor = (format) => (
+    format === 'horizontal' ? 'video_url_horizontal'
+      : format === 'letterboxed' ? 'video_url_letterboxed'
+      : 'video_url'
+  );
+  const handleBulkSubtitles = async (options, targetJobId = jobId, targetClips = results?.clips, skipAlreadyStyled = false, format = 'vertical') => {
     const clips = targetClips || [];
-    const total = clips.length;
-    if (!total) return;
+    const urlField = urlFieldFor(format);
+    // Clips from before this format existed (or a source too short/silent
+    // for one of the extra formats to have rendered at all) simply don't
+    // have this field — skip them rather than styling nothing / erroring.
+    const indices = clips.map((c, i) => i).filter((i) => clips[i][urlField]);
+    const total = indices.length;
+    if (!total) return 0;
     const isFocused = targetJobId === jobId;
     if (isFocused) setBulkSub({ running: true, current: 0, total, errors: 0 });
     let errors = 0;
-    for (let i = 0; i < total; i++) {
-      if (isFocused) setBulkSub({ running: true, current: i + 1, total, errors });
-      if (skipAlreadyStyled && /\/subtitled_/.test(clips[i].video_url || '')) continue;
+    for (let n = 0; n < total; n++) {
+      const i = indices[n];
+      if (isFocused) setBulkSub({ running: true, current: n + 1, total, errors });
+      if (skipAlreadyStyled && /\/subtitled_/.test(clips[i][urlField] || '')) continue;
       try {
         const res = await apiFetch('/api/subtitle', {
           method: 'POST',
@@ -274,8 +300,8 @@ function App() {
             effect: options.effect || 'none',
             base_opacity: options.baseOpacity ?? 1.0,
             uppercase: options.uppercase || false,
-            // Chain from the clip's current server file (its video_url basename).
-            input_filename: (clips[i].video_url || '').split('/').pop(),
+            // Chain from the clip's current server file for THIS format.
+            input_filename: (clips[i][urlField] || '').split('/').pop(),
           }),
         });
         if (!res.ok) errors++;
@@ -292,22 +318,37 @@ function App() {
     return errors;
   };
 
-  // Auto-apply the user's saved default subtitle style the moment a job's
+  // Runs handleBulkSubtitles once per format that has a saved default,
+  // sequentially, against the given job's clips — the single entry point
+  // both auto-apply effects below call, so "apply every format's own
+  // default" is defined once instead of duplicated at each call site.
+  // Returns the total error count across all formats attempted.
+  const applyDefaultStylesToJob = async (targetJobId, clips) => {
+    let errors = 0;
+    for (const { id: format } of FORMATS) {
+      const style = defaultStyles[format];
+      if (!style) continue;
+      errors += (await handleBulkSubtitles(style, targetJobId, clips, true, format)) || 0;
+    }
+    return errors;
+  };
+
+  // Auto-apply the user's saved default subtitle style(s) the moment a job's
   // clips are ready — no button, no need to open the subtitle editor per
-  // clip. Fires once per job (autoStyledJobRef), and only when a profile is
-  // actually saved; otherwise clips keep the server's factory-default look,
-  // unchanged from before this feature existed.
+  // clip. Fires once per job (autoStyledJobRef), and only for formats that
+  // actually have a profile saved; a format with none keeps the server's
+  // factory-default look, unchanged from before this feature existed.
   useEffect(() => {
-    if (status !== 'complete' || !jobId || !defaultStyle) return;
+    if (status !== 'complete' || !jobId) return;
     if (!results?.clips?.length) return;
     if (autoStyledJobRef.current.has(jobId)) return;
     autoStyledJobRef.current.add(jobId); // block re-entry this session; not yet persisted
-    handleBulkSubtitles(defaultStyle, jobId, results.clips, true).then((errs) => {
+    applyDefaultStylesToJob(jobId, results.clips).then((errs) => {
       if (errs === 0) markJobAutoStyled(jobId); // fully done — persist so it never retries
       else autoStyledJobRef.current.delete(jobId); // partial/failed — eligible for retry next load
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, jobId, results, defaultStyle]);
+  }, [status, jobId, results, defaultStyles]);
 
   const handleDownloadAll = async () => {
     if (!jobId) return;
@@ -416,7 +457,7 @@ function App() {
   // Always-on rather than gated on `status`, since there can be background
   // work even when the focused view is idle. Background jobs read/write
   // through jobListRef so this effect doesn't need to restart when the list
-  // changes — only jobId/status (the focused job) and defaultStyle do that.
+  // changes — only jobId/status (the focused job) and defaultStyles do that.
   useEffect(() => {
     const tick = async () => {
       if (jobId && status === 'processing') {
@@ -447,9 +488,9 @@ function App() {
             upsertJob(j.jobId, { status: 'complete' });
             // Same auto-apply the focused job's effect does above, just for
             // a job nobody is currently looking at.
-            if (defaultStyle && data.result?.clips?.length && !autoStyledJobRef.current.has(j.jobId)) {
+            if (data.result?.clips?.length && !autoStyledJobRef.current.has(j.jobId)) {
               autoStyledJobRef.current.add(j.jobId);
-              handleBulkSubtitles(defaultStyle, j.jobId, data.result.clips, true).then((errs) => {
+              applyDefaultStylesToJob(j.jobId, data.result.clips).then((errs) => {
                 if (errs === 0) markJobAutoStyled(j.jobId);
                 else autoStyledJobRef.current.delete(j.jobId);
               });
@@ -466,7 +507,7 @@ function App() {
     const interval = setInterval(tick, 2000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, jobId, defaultStyle]);
+  }, [status, jobId, defaultStyles]);
 
 
   // No BYOK in this fork: the only way this can be true is a server
@@ -848,19 +889,42 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Estilo de subtítulos por defecto</h2>
                   </div>
-                  {defaultStyle
+                  {defaultStyles[settingsStyleFormat]
                     ? <span className="badge-ok"><Check size={12} /> configurado</span>
                     : <span className="readout">valor de fábrica</span>}
                 </div>
                 <p className="text-xs text-muted mb-4 leading-relaxed">
-                  Se aplica automáticamente a todos los clips de cada vídeo nuevo — sin tener que abrir el editor
-                  de subtítulos cada vez. Crea tu propio estilo abajo (fuente, colores, tamaño, todo), o parte de
-                  un preset y ajústalo a tu gusto.
+                  Cada uno de los 3 formatos en que se genera un clip (vertical recortado, girar móvil,
+                  vertical encajado) tiene su propio estilo por defecto — uno pensado para un recorte ajustado
+                  a la cara puede quedar mal encima de la versión encajada del mismo clip. Se aplica
+                  automáticamente a cada formato de cada vídeo nuevo, sin tener que abrir el editor cada vez.
                 </p>
-                <DefaultStyleEditor value={defaultStyle} onChange={setDefaultStyle} />
-                {defaultStyle && (
+                {/* Format tabs — DefaultStyleEditor gets a key per format so
+                    its internal state (which custom preset is "loaded", the
+                    new-preset-name input, …) never bleeds between formats. */}
+                <div className="flex gap-1.5 mb-4 border-b border-rule">
+                  {FORMATS.map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setSettingsStyleFormat(f.id)}
+                      className={`pb-2.5 px-1 -mb-px border-b-2 text-xs lowercase whitespace-nowrap transition-colors flex items-center gap-1.5 ${settingsStyleFormat === f.id
+                        ? 'text-ink border-brass'
+                        : 'text-muted border-transparent hover:text-ink2'
+                        }`}
+                    >
+                      {f.label}
+                      {defaultStyles[f.id] && <span className="w-1.5 h-1.5 rounded-full bg-brass shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+                <DefaultStyleEditor
+                  key={settingsStyleFormat}
+                  value={defaultStyles[settingsStyleFormat]}
+                  onChange={(style) => setDefaultStyleFor(settingsStyleFormat, style)}
+                />
+                {defaultStyles[settingsStyleFormat] && (
                   <button
-                    onClick={() => setDefaultStyle(null)}
+                    onClick={() => setDefaultStyleFor(settingsStyleFormat, null)}
                     className="mt-4 text-xs text-muted hover:text-ink transition-colors"
                   >
                     restablecer al valor de fábrica

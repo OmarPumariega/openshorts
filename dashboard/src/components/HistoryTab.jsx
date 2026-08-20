@@ -207,7 +207,7 @@ export default function HistoryTab({ onOpenProject }) {
                           download
                           className="text-micro font-mono uppercase text-muted hover:text-ink flex items-center gap-1 transition-colors mt-1"
                         >
-                          <Download size={12} /> horizontal
+                          <Download size={12} /> girar móvil
                         </a>
                       )}
                       {clip.video_url_letterboxed && (

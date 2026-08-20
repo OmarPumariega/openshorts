@@ -426,6 +426,23 @@ def _extra_format_urls(output_dir, job_id, base_name, index):
     return urls
 
 
+def _format_field_for_filename(filename):
+    """Which clip field a rendered file belongs to, from its clean name's
+    suffix — "video_url" (the vertical crop, no suffix), "video_url_
+    horizontal" or "video_url_letterboxed". Endpoints that restyle/recut a
+    clip (subtitle burn, subtitle removal, hook text) take an explicit
+    input_filename and must write the result back to the SAME field it came
+    from, not always "video_url" — restyling the letterboxed format must not
+    overwrite the vertical crop's URL with the letterboxed one.
+    """
+    stem = filename.rsplit('.', 1)[0]
+    if stem.endswith('_horizontal'):
+        return 'video_url_horizontal'
+    if stem.endswith('_letterboxed'):
+        return 'video_url_letterboxed'
+    return 'video_url'
+
+
 def _strip_burned_captions(output_dir, filename):
     """Walk ``subtitled_<ts>_`` prefixes back to the file without burned captions.
 
@@ -3353,17 +3370,22 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         await _metering.commit_reservation(reservation_id)
 
     # 3. Update Result and Metadata
+    # video_url_field: which of the three format fields this restyle belongs
+    # to — filename still carries its "_horizontal"/"_letterboxed" suffix (the
+    # subtitled_<ts>_ prefix job just added doesn't touch it), so styling the
+    # letterboxed format must not overwrite the vertical crop's video_url.
+    video_url_field = _format_field_for_filename(filename)
     # Update InMemory Jobs
     if req.clip_index < len(job['result']['clips']):
-         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-    
+         job['result']['clips'][req.clip_index][video_url_field] = f"/videos/{req.job_id}/{output_filename}"
+
     # Update Metadata on Disk (Persistence)
     try:
         if req.clip_index < len(clips):
-            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+            clips[req.clip_index][video_url_field] = f"/videos/{req.job_id}/{output_filename}"
             # Update the main data structure
             data['shorts'] = clips
-            
+
             # Write back
             with open(json_files[0], 'w') as f:
                 json.dump(data, f, indent=4)
@@ -3429,10 +3451,11 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
                             detail="The original clip is no longer available.")
 
     new_url = f"/videos/{req.job_id}/{filename}"
+    video_url_field = _format_field_for_filename(filename)
     if req.clip_index < len(job.get('result', {}).get('clips', [])):
-        job['result']['clips'][req.clip_index]['video_url'] = new_url
+        job['result']['clips'][req.clip_index][video_url_field] = new_url
     try:
-        clips[req.clip_index]['video_url'] = new_url
+        clips[req.clip_index][video_url_field] = new_url
         data['shorts'] = clips
         with open(json_files[0], 'w') as f:
             json.dump(data, f, indent=4)
@@ -3545,14 +3568,15 @@ async def add_hook(req: HookRequest, request: Request):
             output_filename = os.path.basename(recap)
 
     # Update Persistence (Same logic as subtitles)
+    video_url_field = _format_field_for_filename(filename)
     # Update InMemory Jobs
     if req.clip_index < len(job['result']['clips']):
-         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-    
+         job['result']['clips'][req.clip_index][video_url_field] = f"/videos/{req.job_id}/{output_filename}"
+
     # Update Metadata on Disk
     try:
         if req.clip_index < len(clips):
-            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+            clips[req.clip_index][video_url_field] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
             with open(json_files[0], 'w') as f:
                 json.dump(data, f, indent=4)
