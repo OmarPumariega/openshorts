@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, AlertCircle, Loader2, Copy, Check, Wand2, Type, FileText, Scissors, Crosshair } from 'lucide-react';
+import { Download, AlertCircle, Loader2, Copy, Check, Wand2, Type, FileText, Scissors, Crosshair, Image as ImageIcon } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -139,6 +139,14 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
     const [isHooking, setIsHooking] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
     const [editError, setEditError] = useState(null);
+
+    // Thumbnails: vertical-only (see thumbnailStyleFor comment below), so
+    // this whole block is inert/unused on horizontal/letterboxed cards.
+    const [showThumbnailModal, setShowThumbnailModal] = useState(false);
+    const [isGeneratingThumbnail, setIsGeneratingThumbnail] = useState(false);
+    const [thumbnailStyle, setThumbnailStyle] = useState('classic');
+    const [thumbnailUrl, setThumbnailUrl] = useState(null);
+    const [thumbnailError, setThumbnailError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(() => {
         const secs = clipDurationSeconds(clip);
@@ -437,6 +445,52 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
         }
     };
 
+    // Vertical-only: thumbnails.py always builds from the vertical crop's
+    // clean file — the other two formats are the same footage rotated/
+    // letterboxed, not a different scene, so there's no separate thumbnail
+    // to generate for them (see app.py's /api/thumbnails docstring).
+    const handleGenerateThumbnail = async (mode = 'card') => {
+        setIsGeneratingThumbnail(true);
+        setThumbnailError(null);
+        try {
+            const res = await apiFetch('/api/thumbnails', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId, clip_index: index, mode, style: thumbnailStyle,
+                }),
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail || await res.text());
+            const data = await res.json();
+            if (data.thumbnail_url) setThumbnailUrl(getApiUrl(data.thumbnail_url));
+        } catch (e) {
+            setThumbnailError(e.message);
+        } finally {
+            setIsGeneratingThumbnail(false);
+        }
+    };
+
+    const downloadThumbnail = async () => {
+        if (!thumbnailUrl) return;
+        try {
+            const response = await fetch(thumbnailUrl);
+            if (!response.ok) throw new Error('Download failed');
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `thumbnail-${index + 1}.jpg`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (err) {
+            console.error('Thumbnail download error:', err);
+            window.open(thumbnailUrl, '_blank');
+        }
+    };
+
     const durationReadout = formatDuration(clip);
 
     return (
@@ -583,6 +637,18 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                         </button>
                     )}
 
+                    {/* Same reasoning as auto-editar: always built from the
+                        vertical crop's clean file, so it only makes sense here. */}
+                    {format === 'vertical' && (
+                        <button
+                            onClick={() => setShowThumbnailModal(true)}
+                            className={QUIET_BTN}
+                        >
+                            <ImageIcon size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                            miniatura
+                        </button>
+                    )}
+
                     <button
                         onClick={() => setShowSubtitleModal(true)}
                         disabled={isSubtitling}
@@ -699,6 +765,80 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                     onContinue={downloadClip}
                 />
             )}
+
+            {/* Thumbnail: card mode (default, always available) composites the
+                clip's own hook text over a picked frame — no AI call, matches
+                the in-video hook look. The AI option calls Gemini's native
+                image model server-side and only works with a direct
+                GEMINI_API_KEY (not OpenRouter) — the backend rejects it
+                clearly if that's not configured, surfaced below as-is. */}
+            <Modal
+                isOpen={showThumbnailModal}
+                onClose={() => setShowThumbnailModal(false)}
+                eyebrow="MINIATURA"
+                title="generar miniatura"
+                size="md"
+            >
+                <div className="space-y-4">
+                    {thumbnailUrl && (
+                        <div className="rounded-input overflow-hidden border border-rule bg-black aspect-video">
+                            <img src={thumbnailUrl} alt="Miniatura generada" className="w-full h-full object-contain" />
+                        </div>
+                    )}
+                    {thumbnailError && (
+                        <div className="px-3 py-2 rounded-input text-xs text-danger bg-[color-mix(in_oklab,var(--color-danger)_10%,transparent)] flex items-center gap-2">
+                            <AlertCircle size={14} className="shrink-0" />
+                            {thumbnailError}
+                        </div>
+                    )}
+                    <div>
+                        <p className="eyebrow mb-2">Estilo de la tarjeta</p>
+                        <div className="grid grid-cols-3 gap-1.5">
+                            {['classic', 'dark', 'yellow', 'red', 'outline', 'outline_yellow'].map((s) => (
+                                <button
+                                    key={s}
+                                    onClick={() => setThumbnailStyle(s)}
+                                    className={`px-2 py-1.5 rounded-input border text-xs transition-colors
+                                        ${thumbnailStyle === s
+                                            ? 'border-[color:var(--color-accent)] text-ink'
+                                            : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                >
+                                    {s}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            onClick={() => handleGenerateThumbnail('card')}
+                            disabled={isGeneratingThumbnail}
+                            className={QUIET_BTN}
+                        >
+                            {isGeneratingThumbnail
+                                ? <Loader2 size={16} className="animate-spin text-brass shrink-0" />
+                                : <ImageIcon size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                            {isGeneratingThumbnail ? 'generando…' : 'tarjeta (rápido)'}
+                        </button>
+                        <button
+                            onClick={() => handleGenerateThumbnail('ai')}
+                            disabled={isGeneratingThumbnail}
+                            className={QUIET_BTN}
+                            title="Necesita una GEMINI_API_KEY directa configurada en el servidor"
+                        >
+                            {isGeneratingThumbnail
+                                ? <Loader2 size={16} className="animate-spin text-brass shrink-0" />
+                                : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                            {isGeneratingThumbnail ? 'generando…' : 'con IA'}
+                        </button>
+                    </div>
+                    {thumbnailUrl && (
+                        <button onClick={downloadThumbnail} className={`${QUIET_BTN} w-full`}>
+                            <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                            descargar miniatura
+                        </button>
+                    )}
+                </div>
+            </Modal>
 
         </div>
     );

@@ -3591,3 +3591,122 @@ async def add_hook(req: HookRequest, request: Request):
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
 
+
+class ThumbnailRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    mode: Optional[str] = "card"       # "card" (default, always available) | "ai" (needs a direct GEMINI_API_KEY)
+    style: Optional[str] = "classic"   # card mode only — same HOOK_STYLES as /api/hook
+    text: Optional[str] = None         # override text; defaults to the clip's own viral_hook_text
+    count: Optional[int] = 3           # ai mode only — how many candidates to generate
+
+
+@app.post("/api/thumbnails")
+async def generate_thumbnail_endpoint(req: ThumbnailRequest, request: Request):
+    """Generate a 16:9 thumbnail for one clip — a still frame from the clip's
+    vertical crop, composited with bold text. See thumbnails.py's module
+    docstring for why there are two modes and what gates the AI one.
+
+    Always builds from the VERTICAL crop specifically (not the girar-móvil
+    or letterboxed formats): it's the one guaranteed to exist, and its
+    face-tracked framing gives the best still of the presenter — the other
+    two formats show the same footage rotated/letterboxed, not a different
+    scene to pick from.
+    """
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip_data = clips[req.clip_index]
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    filename = _canonical_clip_file(output_dir, base_name, req.clip_index)
+    # Pick the background frame from the CLEAN (uncaptioned) file, not
+    # whatever's currently "current" — that's very likely the subtitled
+    # version, and grabbing a frame from it bakes the video's own burned
+    # captions into the thumbnail's background, under the new hook-style
+    # card on top. Same invariant /api/hook enforces before overlaying.
+    clean_name, stripped_ok = _strip_burned_captions(output_dir, filename)
+    if stripped_ok and os.path.exists(os.path.join(output_dir, clean_name)):
+        filename = clean_name
+    input_path = os.path.join(output_dir, filename)
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+    text = (req.text or clip_data.get('viral_hook_text')
+            or clip_data.get('video_title_for_youtube_short') or "MIRA ESTO")
+
+    thumb_dir = os.path.join(THUMBNAILS_DIR, req.job_id, str(req.clip_index))
+    os.makedirs(thumb_dir, exist_ok=True)
+    frame_path = os.path.join(thumb_dir, "source_frame.jpg")
+
+    from thumbnails import pick_thumbnail_frame, generate_thumbnail_card, generate_thumbnail_ai
+
+    loop = asyncio.get_event_loop()
+    got_frame = await loop.run_in_executor(None, pick_thumbnail_frame, input_path, frame_path)
+    if not got_frame:
+        raise HTTPException(status_code=500, detail="No se pudo extraer un fotograma del clip.")
+
+    urls = []
+    if req.mode == "ai":
+        # Native Gemini image-generation, not text/vision-in — no OpenRouter
+        # equivalent exists (see thumbnails.py's module docstring), so this
+        # checks the raw env var rather than resolve_gemini(), which would
+        # happily hand back an OpenRouter key that can't do this.
+        direct_key = os.environ.get("GEMINI_API_KEY")
+        if not direct_key:
+            raise HTTPException(
+                status_code=400,
+                detail="La miniatura por IA necesita una GEMINI_API_KEY directa configurada en "
+                       "el servidor (una clave de OpenRouter no vale para esto) — usa el modo "
+                       "\"tarjeta\" mientras tanto.",
+            )
+        try:
+            paths = await loop.run_in_executor(
+                None, lambda: generate_thumbnail_ai(
+                    direct_key, text, thumb_dir, frame_jpg_path=frame_path,
+                    count=req.count or 3,
+                    video_context=clip_data.get('video_description_for_tiktok', '')))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        urls = [f"/thumbnails/{req.job_id}/{req.clip_index}/{os.path.basename(p)}" for p in paths]
+    else:
+        out_path = os.path.join(thumb_dir, f"thumb_card_{int(time.time())}.jpg")
+        try:
+            ok = await loop.run_in_executor(
+                None, generate_thumbnail_card, frame_path, text, out_path, req.style or "classic")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        if not ok:
+            raise HTTPException(status_code=500, detail="No se pudo generar la miniatura.")
+        urls = [f"/thumbnails/{req.job_id}/{req.clip_index}/{os.path.basename(out_path)}"]
+
+    # Persist the latest thumbnail URL on the clip — same in-memory +
+    # metadata.json pattern the other edit endpoints use for video_url.
+    thumb_url = urls[0] if urls else None
+    if thumb_url:
+        if req.clip_index < len(job.get('result', {}).get('clips', [])):
+            job['result']['clips'][req.clip_index]['thumbnail_url'] = thumb_url
+        try:
+            clips[req.clip_index]['thumbnail_url'] = thumb_url
+            data['shorts'] = clips
+            with open(json_files[0], 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Failed to update metadata.json with thumbnail: {e}")
+
+    return {"success": True, "thumbnail_urls": urls, "thumbnail_url": thumb_url}
+
