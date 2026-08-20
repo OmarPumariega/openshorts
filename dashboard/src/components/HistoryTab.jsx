@@ -195,7 +195,28 @@ export default function HistoryTab({ onOpenProject }) {
                           download
                           className="text-micro font-mono uppercase text-brass hover:text-ink flex items-center gap-1 transition-colors"
                         >
-                          <Download size={12} /> descargar
+                          <Download size={12} /> vertical
+                        </a>
+                      )}
+                      {/* The other two formats every clip ships in alongside
+                          the vertical crop above — plain downloads, omitted
+                          for clips from before this shipped. */}
+                      {clip.video_url_horizontal && (
+                        <a
+                          href={getApiUrl(clip.video_url_horizontal)}
+                          download
+                          className="text-micro font-mono uppercase text-muted hover:text-ink flex items-center gap-1 transition-colors mt-1"
+                        >
+                          <Download size={12} /> horizontal
+                        </a>
+                      )}
+                      {clip.video_url_letterboxed && (
+                        <a
+                          href={getApiUrl(clip.video_url_letterboxed)}
+                          download
+                          className="text-micro font-mono uppercase text-muted hover:text-ink flex items-center gap-1 transition-colors mt-1"
+                        >
+                          <Download size={12} /> encajado
                         </a>
                       )}
                     </div>
