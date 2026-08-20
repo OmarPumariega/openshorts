@@ -151,6 +151,23 @@ class _OpenRouterClient:
         if temperature is not None:
             body["temperature"] = temperature
 
+        # Image generation: Gemini's SDK signals this via response_modalities
+        # (["TEXT","IMAGE"], thumbnails.py's generate_thumbnail_ai). OpenRouter
+        # exposes the same underlying models through its ordinary chat-
+        # completions endpoint — no separate image API — gated on a plain
+        # `"modalities": ["image","text"]` field in the request body; verified
+        # directly against openrouter.ai/api/v1/chat/completions with
+        # google/gemini-3.1-flash-image-preview, which returns
+        # message.images[].image_url.url as a data: URI, decoded below in
+        # _wrap_response. image_config (aspect_ratio/image_size) has no
+        # OpenRouter equivalent — the prompt text asking for a "YouTube
+        # thumbnail" already nudges most models toward a widescreen result
+        # without it (measured ~1408x768, close enough to 16:9).
+        modalities = getattr(config, "response_modalities", None) if config is not None else None
+        wants_image = bool(modalities) and any(str(m).upper() == "IMAGE" for m in modalities)
+        if wants_image:
+            body["modalities"] = ["image", "text"]
+
         resp = httpx.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
@@ -161,17 +178,44 @@ class _OpenRouterClient:
         return _wrap_response(resp.json(), schema_cls)
 
 
+class _ImagePayload:
+    """Wraps one OpenRouter image-output data: URI as a genai Image-alike —
+    just enough for thumbnails.py's `image.save(path)` call to work
+    unchanged against either provider."""
+
+    def __init__(self, data_uri: str):
+        _, _, b64 = data_uri.partition(",")
+        self._raw = base64.b64decode(b64) if b64 else b""
+
+    def save(self, path):
+        with open(path, "wb") as f:
+            f.write(self._raw)
+
+
 def _wrap_response(data: dict, schema_cls):
     """Build a genai-response-shaped object out of an OpenRouter chat-completion
     JSON body, matching exactly the attributes gemini_worker.py's helpers read
-    via getattr (see raise_if_blocked / _get_response_text / _calculate_cost_analysis)."""
+    via getattr (see raise_if_blocked / _get_response_text / _calculate_cost_analysis),
+    plus a top-level `.parts` list (mirroring genai's own response.parts
+    shortcut) for thumbnails.py's image-generation path — each part exposes
+    `.text` (str or None) and `.as_image()` (an _ImagePayload or None), same
+    shape as a real google-genai Part."""
     choices = data.get("choices") or []
     text = ""
     finish_reason = None
+    parts = []
     if choices:
         message = choices[0].get("message") or {}
         text = message.get("content") or ""
         finish_reason = choices[0].get("finish_reason")
+        if text:
+            parts.append(SimpleNamespace(text=text, as_image=lambda: None))
+        for img in (message.get("images") or []):
+            url = ((img or {}).get("image_url") or {}).get("url") or ""
+            if not url:
+                continue
+            payload = _ImagePayload(url)
+            parts.append(SimpleNamespace(text=None, as_image=lambda p=payload: p))
 
     # OpenRouter/upstream refusals show up as an empty choices list or a
     # finish_reason of "content_filter" rather than Gemini's prompt_feedback
@@ -196,6 +240,7 @@ def _wrap_response(data: dict, schema_cls):
     return SimpleNamespace(
         text=text,
         parsed=parsed,
+        parts=parts,
         candidates=[candidate],
         prompt_feedback=SimpleNamespace(block_reason=block_reason),
         usage_metadata=SimpleNamespace(

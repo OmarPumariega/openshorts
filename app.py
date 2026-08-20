@@ -3662,22 +3662,21 @@ async def generate_thumbnail_endpoint(req: ThumbnailRequest, request: Request):
 
     urls = []
     if req.mode == "ai":
-        # Native Gemini image-generation, not text/vision-in — no OpenRouter
-        # equivalent exists (see thumbnails.py's module docstring), so this
-        # checks the raw env var rather than resolve_gemini(), which would
-        # happily hand back an OpenRouter key that can't do this.
-        direct_key = os.environ.get("GEMINI_API_KEY")
-        if not direct_key:
+        # Works on either LLM_PROVIDER now (see thumbnails.py's module
+        # docstring — OpenRouter proxies this exact model's image output via
+        # the same chat-completions endpoint, verified live), so this gates
+        # on whichever key resolve_gemini() would use for the rest of the
+        # pipeline, not a GEMINI_API_KEY-specific check.
+        if not await resolve_gemini(request):
             raise HTTPException(
                 status_code=400,
-                detail="La miniatura por IA necesita una GEMINI_API_KEY directa configurada en "
-                       "el servidor (una clave de OpenRouter no vale para esto) — usa el modo "
-                       "\"tarjeta\" mientras tanto.",
+                detail="La miniatura por IA necesita una clave de IA configurada en el servidor "
+                       "(Gemini u OpenRouter) — usa el modo \"tarjeta\" mientras tanto.",
             )
         try:
             paths = await loop.run_in_executor(
                 None, lambda: generate_thumbnail_ai(
-                    direct_key, text, thumb_dir, frame_jpg_path=frame_path,
+                    text, thumb_dir, frame_jpg_path=frame_path,
                     count=req.count or 3,
                     video_context=clip_data.get('video_description_for_tiktok', '')))
         except Exception as e:

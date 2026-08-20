@@ -823,7 +823,7 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                             onClick={() => handleGenerateThumbnail('ai')}
                             disabled={isGeneratingThumbnail}
                             className={QUIET_BTN}
-                            title="Necesita una GEMINI_API_KEY directa configurada en el servidor"
+                            title="Necesita una clave de IA (Gemini u OpenRouter) configurada en el servidor"
                         >
                             {isGeneratingThumbnail
                                 ? <Loader2 size={16} className="animate-spin text-brass shrink-0" />

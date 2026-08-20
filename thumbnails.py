@@ -108,7 +108,7 @@ def generate_thumbnail_card(frame_jpg_path, text, out_jpg_path, style="classic")
             os.remove(card_path)
 
 
-def generate_thumbnail_ai(api_key, title, out_dir, frame_jpg_path=None,
+def generate_thumbnail_ai(title, out_dir, frame_jpg_path=None,
                           extra_prompt="", count=3, video_context=""):
     """AI-composed thumbnails via Gemini's native image-generation model.
 
@@ -117,21 +117,36 @@ def generate_thumbnail_ai(api_key, title, out_dir, frame_jpg_path=None,
     directly to a caller-supplied out_dir instead — no multi-tenant session
     store to key off of) and the face_image_path parameter (the picked clip
     frame already shows the presenter, a second face reference isn't needed
-    for this single-user tool). The prompt and the actual generate_content
-    call are otherwise unchanged from the working original.
+    for this single-user tool). The prompt and the actual generation call are
+    otherwise unchanged from the working original.
+
+    Goes through llm_client.get_client() rather than a raw genai.Client(), so
+    this works on either LLM_PROVIDER — including OpenRouter, verified live
+    against openrouter.ai/api/v1/chat/completions with google/gemini-3.1-
+    flash-image-preview, which supports this exact model's image output via
+    a plain `modalities` field on the ordinary chat-completions endpoint (see
+    llm_client.py's _OpenRouterClient._generate for the request/response
+    translation). No API key parameter here for that reason — get_client()
+    resolves the right one from the environment itself.
 
     Returns a list of saved JPG paths (may be shorter than `count` if some
     generations failed; raises only if ALL of them failed).
     """
-    from google import genai
-    from google.genai import types
+    from google.genai import types as genai_types
+    import llm_client
 
     os.makedirs(out_dir, exist_ok=True)
-    client = genai.Client(api_key=api_key)
+    client = llm_client.get_client()
 
+    # Built from genai Part objects (not raw strings/PIL.Image) so the exact
+    # same `contents` list works against both the native genai SDK (which
+    # also accepts Part objects directly) and llm_client's OpenRouter path
+    # (_build_message_content only recognises Part-shaped items — inline_data
+    # for images, text for the rest — not a bare PIL.Image).
     prompt_parts = []
     if frame_jpg_path and os.path.exists(frame_jpg_path):
-        prompt_parts.append(Image.open(frame_jpg_path))
+        with open(frame_jpg_path, "rb") as f:
+            prompt_parts.append(genai_types.Part.from_bytes(data=f.read(), mime_type="image/jpeg"))
 
     context_block = f"\nVIDEO CONTEXT (use this to understand the video and design a relevant thumbnail):\n{video_context}\n" if video_context else ""
     extra_block = f"\n⚠️ MANDATORY USER INSTRUCTIONS (MUST follow these exactly — they override any default behavior):\n{extra_prompt}\n" if extra_prompt else ""
@@ -156,7 +171,11 @@ DESIGN REQUIREMENTS:
     if frame_jpg_path and os.path.exists(frame_jpg_path):
         text_prompt += "\n- Use the provided frame as the background/subject reference — keep the person recognizable"
 
-    prompt_parts.append(text_prompt)
+    # Wrapped in Part.from_text rather than appended as a bare string: the
+    # OpenRouter path's _build_message_content reads .text off each item via
+    # getattr, which a plain str doesn't have — the prompt would silently
+    # vanish rather than error.
+    prompt_parts.append(genai_types.Part.from_text(text=text_prompt))
 
     thumbnails = []
     last_error = None
@@ -166,9 +185,9 @@ DESIGN REQUIREMENTS:
             response = client.models.generate_content(
                 model="gemini-3.1-flash-image-preview",
                 contents=prompt_parts,
-                config=types.GenerateContentConfig(
+                config=genai_types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio="16:9", image_size="2K"),
+                    image_config=genai_types.ImageConfig(aspect_ratio="16:9", image_size="2K"),
                 ),
             )
             for part in response.parts:
