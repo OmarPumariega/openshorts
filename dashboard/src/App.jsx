@@ -597,12 +597,75 @@ function App() {
     localStorage.removeItem(SESSION_KEY);
   };
 
+  // Browser back/forward support. The app has no router — every tab switch
+  // and every project focus was plain React state, invisible to the
+  // browser's own history stack, so the back button had nothing of ours to
+  // step back through and just left the app (or did nothing at all). This
+  // pushes one history entry per navigation instead, keyed on (tab, jobId),
+  // and popNavState below restores state from it on back/forward without
+  // pushing again — pushing there would turn one "back" press into a loop.
+  const pushNavState = (tab, id) => {
+    try {
+      window.history.pushState({ tab, jobId: id ?? null }, '', `#/${tab}`);
+    } catch (e) { /* history API unavailable — navigation still works, just not back/forward */ }
+  };
+
+  // For a tab switch that doesn't touch which job is loaded (Ajustes,
+  // Historial from the sidebar, …) — setActiveTab plus a history entry.
+  const navigateTab = (tab) => {
+    setActiveTab(tab);
+    pushNavState(tab, jobId);
+  };
+
+  const poppingRef = useRef(false);
+  const historyInitRef = useRef(false);
+
+  // Establish the FIRST history entry once, after the localStorage session
+  // (if any) has finished restoring — so the very first back-press has
+  // something of ours to land on instead of falling straight out of the app.
+  useEffect(() => {
+    if (historyInitRef.current) return;
+    historyInitRef.current = true;
+    try {
+      window.history.replaceState({ tab: activeTab, jobId }, '', `#/${activeTab}`);
+    } catch (e) { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Back/forward: restore the (tab, jobId) pair from the entry being
+  // navigated to. A jobId that isn't already loaded gets re-fetched through
+  // focusJob, same as clicking it anywhere else in the UI — just without
+  // pushing a further history entry (poppingRef guards that).
+  useEffect(() => {
+    const onPopState = (e) => {
+      const state = e.state || { tab: 'dashboard', jobId: null };
+      poppingRef.current = true;
+      if (state.jobId && state.jobId !== jobId) {
+        focusJob(state.jobId, { pushHistory: false }).finally(() => { poppingRef.current = false; });
+      } else {
+        setActiveTab(state.tab || 'dashboard');
+        poppingRef.current = false;
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
+
   // Switch the main view to a different tracked job (JobSwitcher) — a
   // background job the user started earlier and left running, or one that
   // already finished. Always re-fetches fresh rather than trusting the
   // switcher's cached status, since that's only updated on the 2s poll tick.
-  const focusJob = async (id) => {
-    if (id === jobId) return;
+  const focusJob = async (id, { pushHistory = true } = {}) => {
+    if (id === jobId) {
+      // Already the loaded job (e.g. clicking "abrir para editar" in History
+      // on the project you're already focused on, from a different tab) —
+      // nothing to re-fetch, but the tab switch below still has to happen or
+      // the click looks like it did nothing at all.
+      setActiveTab('dashboard');
+      if (pushHistory) pushNavState('dashboard', id);
+      return;
+    }
     flushClipState();
     setProjectState(null);
     setNoSource(false);
@@ -618,6 +681,7 @@ function App() {
       // backend itself served for this job, same as session-reload recovery.
       setProcessingMedia({ type: 'server', payload: `/api/source/${id}` });
       setActiveTab('dashboard');
+      if (pushHistory) pushNavState('dashboard', id);
     } catch (e) {
       alert(`No se pudo cargar ese trabajo: ${e.message}`);
     }
@@ -627,7 +691,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-paper overflow-hidden">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={navigateTab} />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
@@ -676,7 +740,7 @@ function App() {
 
             {keysMissing && (
               <button
-                onClick={() => setActiveTab('settings')}
+                onClick={() => navigateTab('settings')}
                 className="badge-warn hover:brightness-125 transition-all"
                 title={`El servidor no tiene ${envVarName} configurada`}
               >
@@ -701,7 +765,7 @@ function App() {
               </div>
             </div>
             <button
-              onClick={() => setActiveTab('settings')}
+              onClick={() => navigateTab('settings')}
               className="btn-quiet px-3 py-1.5 text-xs shrink-0"
             >
               Detalles
@@ -727,7 +791,7 @@ function App() {
         {gateThisTab && <TrialGate toolName={TOOL_NAMES[activeTab] || 'this'} />}
 
         {/* Advanced tools (AI Shorts, AI Agent): BYOK fal.ai + ElevenLabs notice. */}
-        {advancedThisTab && <AdvancedBanner needsPlan={needsPlan} onKeys={() => setActiveTab('settings')} />}
+        {advancedThisTab && <AdvancedBanner needsPlan={needsPlan} onKeys={() => navigateTab('settings')} />}
 
         {/* Main Workspace */}
         <div className="flex-1 overflow-hidden relative">
