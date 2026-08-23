@@ -14,6 +14,60 @@ _STDIO_CONFIGURED = False
 DEFAULT_WHISPER_MODEL = "small"
 
 
+def detect_content_band_fraction(video_path):
+    """How much of the frame's HEIGHT is actual footage vs. black letterbox
+    bars, as a 0-1 fraction — used to shrink/position captions on the
+    "encajado" (letterboxed whole-frame-fit) delivery format specifically.
+
+    Why this exists: captions are sized/positioned as a percentage of the
+    FULL video canvas (see burn_subtitles' PlayResY=288 virtual canvas).
+    That's correct for the face-tracked crop and the rotated format, where
+    the footage fills the whole frame — but render_letterbox_fit() pads a
+    16:9 source into a 9:16 canvas with black bars top/bottom, so the
+    visible footage is typically only ~30% of that same canvas height.
+    Sizing captions off the full canvas there makes them look enormous next
+    to the actual picture (reported directly against a real generated
+    clip). Detecting the bars from the actual pixels (via ffmpeg's
+    cropdetect) rather than recomputing the source's original aspect ratio
+    keeps this correct for ANY source shape and works identically whether
+    called right after generation or later from a re-style request, where
+    the original source dimensions aren't readily at hand — only the
+    already-letterboxed file is.
+
+    Returns 1.0 (no adjustment) if detection fails for any reason — a
+    caption-sizing tweak must never be the reason a clip fails to caption.
+    """
+    try:
+        # Sample a few frames a bit into the clip (avoids fade-in-to-black
+        # opening frames reading as "all black" and confusing cropdetect).
+        cmd = ['ffmpeg', '-ss', '0.5', '-i', video_path, '-vframes', '15',
+               '-vf', 'cropdetect=24:2:0', '-f', 'null', '-']
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
+        stderr_text = result.stderr.decode(errors='replace')
+        crops = re.findall(r'crop=(\d+):(\d+):(\d+):(\d+)', stderr_text)
+        if not crops:
+            return 1.0
+        # cropdetect's estimate converges over frames — the last one is the
+        # most stable reading.
+        _, content_h, _, _ = (int(v) for v in crops[-1])
+
+        probe = subprocess.check_output(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=height', '-of', 'csv=p=0', video_path],
+            timeout=15).decode().strip()
+        total_h = int(probe)
+        if total_h <= 0 or content_h <= 0:
+            return 1.0
+
+        fraction = content_h / total_h
+        # Clamp to a sane band: a detection glitch (e.g. reading the whole
+        # frame as "content", or a near-zero sliver) is more likely than a
+        # genuinely correct value outside this range for this format.
+        return min(1.0, max(0.15, fraction))
+    except Exception:
+        return 1.0
+
+
 def get_whisper_config():
     """Return the faster-whisper model config, overridable via env vars."""
     return {
@@ -559,6 +613,16 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     if result.returncode != 0:
         stderr_text = result.stderr.decode(errors='replace')
         _log(f"❌ FFmpeg Subtitle Error: {stderr_text}")
+        # ffmpeg opens output_path and writes the container header before it
+        # can fail mid-encode (OOM kill, bad filter, etc.), leaving a tiny
+        # corrupt stub on disk. Left alone, that stub is the file with the
+        # newest mtime for this clip — _canonical_clip_file (app.py) always
+        # serves "whichever subtitled_* is newest", so a caller that catches
+        # this exception and moves on (auto_caption_clip does, by design —
+        # a caption failure must never cost the user the clip) would silently
+        # make the WHOLE clip unplayable instead of just uncaptioned.
+        if os.path.exists(output_path):
+            os.remove(output_path)
         raise Exception(f"FFmpeg failed: {stderr_text}")
 
     return True

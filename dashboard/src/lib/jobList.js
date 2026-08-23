@@ -61,6 +61,39 @@ export function markJobAutoStyled(id) {
     }
 }
 
+// Which individual (job, format, clip) combinations the "apply my saved
+// default style" pass has already burned — the ONLY reliable signal for
+// that, because every clip already carries a "subtitled_" file the moment
+// it's generated (main.py auto-captions every clip unconditionally, with
+// its own fixed style, before the frontend ever sees it). Sniffing the
+// video_url for a "subtitled_" prefix to decide "does this still need my
+// default style?" was always true, so the default-style auto-apply pass
+// silently no-op'd on every fresh clip — this per-clip ledger replaces
+// that filename heuristic. Same bounded/persisted shape as the job-level
+// ledger above, just keyed by "jobId:format:clipIndex" instead of jobId.
+const STYLED_CLIPS_KEY = 'openshorts_auto_styled_clips';
+const MAX_TRACKED_CLIPS = MAX_TRACKED * 60; // ~20 clips x 3 formats, generous headroom
+
+export function loadAutoStyledClips() {
+    try {
+        const raw = localStorage.getItem(STYLED_CLIPS_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+        return new Set();
+    }
+}
+
+export function markClipAutoStyled(key) {
+    try {
+        const set = loadAutoStyledClips();
+        set.add(key);
+        localStorage.setItem(STYLED_CLIPS_KEY, JSON.stringify([...set].slice(-MAX_TRACKED_CLIPS)));
+    } catch {
+        // localStorage full/unavailable - worst case this clip re-styles once more.
+    }
+}
+
 // Title for the job switcher: prefer a real filename/URL host, fall back to
 // a short id so there's always something to show.
 export function titleFor(jobId, data) {

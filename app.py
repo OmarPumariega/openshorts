@@ -8,6 +8,7 @@ import json
 import shutil
 import glob
 import time
+import tempfile
 import zipfile
 import math
 import itertools
@@ -400,6 +401,12 @@ def _canonical_clip_file(output_dir, base_name, index, suffix=""):
         derived = glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
         if not suffix:
             derived += glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
+        # A burn/recut that dies mid-encode (ffmpeg OOM-killed, etc.) can
+        # leave a corrupt stub of a few dozen bytes behind with a newer
+        # mtime than the real file it was replacing — picking "newest"
+        # blindly would then serve that stub instead of the clip. 10KB is
+        # comfortably below any real (even silent, sub-second) mp4 output.
+        derived = [f for f in derived if os.path.getsize(f) > 10_000]
     except Exception:
         derived = []
     if not derived:
@@ -441,6 +448,28 @@ def _format_field_for_filename(filename):
     if stem.endswith('_letterboxed'):
         return 'video_url_letterboxed'
     return 'video_url'
+
+
+def _assert_filename_belongs_to_clip(filename, base_name, clip_index):
+    """Refuse to (re)style clip N using a file that actually belongs to a
+    DIFFERENT clip index — every derived filename (subtitled_*/recut_*/
+    hook_*) still contains the clean "<base_name>_clip_<n>" stem no matter
+    how many prefixes it has stacked, so a mismatch here means the caller
+    handed this endpoint the wrong clip's file while asking to store the
+    result under this clip's slot. Silently proceeding would burn/restyle
+    clip A's video but publish it as clip B's — a real failure mode found
+    live in this session (a mis-targeted request wrote clip 1's letterboxed
+    render into clip 2's video_url_letterboxed) — so this fails loud with a
+    400 instead of corrupting that slot. `(?!\\d)` guards "_clip_1" from
+    also matching "_clip_10", "_clip_11", etc.
+    """
+    expected = re.compile(rf"{re.escape(base_name)}_clip_{clip_index + 1}(?!\d)")
+    if not expected.search(filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f"input_filename '{filename}' does not belong to clip_index "
+                   f"{clip_index} — refusing to avoid mixing up two clips' videos.",
+        )
 
 
 def _strip_burned_captions(output_dir, filename):
@@ -494,11 +523,36 @@ def _reapply_captions(job_id, clip_index, video_path):
         recipe_segments = (clip.get('recipe') or {}).get('segments')
         if recipe_segments:
             v_transcript = recut.virtual_transcript(transcript, recipe_segments)
-            return _main.auto_caption_clip(
-                video_path, v_transcript, 0.0,
-                recut.total_duration(recipe_segments))
-        return _main.auto_caption_clip(video_path, transcript,
-                                       clip['start'], clip['end'])
+            v_start, v_end = 0.0, recut.total_duration(recipe_segments)
+        else:
+            v_transcript, v_start, v_end = transcript, clip['start'], clip['end']
+
+        # The "girar móvil" file is already rotated 90° — auto_caption_clip
+        # burns straight onto whatever frame it's given, so calling it
+        # directly here would caption the ALREADY-rotated frame: text stays
+        # upright while the picture is sideways (see render_rotate_to_
+        # landscape / render_unrotate_from_landscape's docstrings — this is
+        # the exact bug those exist to avoid at generation time, just hit
+        # again here because /api/edit and /api/hook both funnel through
+        # this same re-caption step on files that are already rotated).
+        # Undo the rotation, caption in native orientation, redo it.
+        if _format_field_for_filename(os.path.basename(video_path)) == 'video_url_horizontal':
+            work_dir = tempfile.mkdtemp(prefix="recaption_rotate_")
+            try:
+                native_path = os.path.join(work_dir, "native.mp4")
+                _main.render_unrotate_from_landscape(video_path, native_path)
+                native_captioned = _main.auto_caption_clip(native_path, v_transcript, v_start, v_end)
+                if not native_captioned:
+                    return None
+                out_dir = os.path.dirname(video_path)
+                out_path = os.path.join(
+                    out_dir, f"subtitled_{int(time.time())}_{os.path.basename(video_path)}")
+                _main.render_rotate_to_landscape(native_captioned, out_path)
+                return out_path
+            finally:
+                shutil.rmtree(work_dir, ignore_errors=True)
+
+        return _main.auto_caption_clip(video_path, v_transcript, v_start, v_end)
     except Exception as e:
         print(f"⚠️  Could not re-apply captions to {video_path}: {e}")
         return None
@@ -2099,7 +2153,7 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
 
 
 from editor import VideoEditor
-from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video
+from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video, detect_content_band_fraction
 from hooks import add_hook_to_video
 
 class EditRequest(BaseModel):
@@ -2317,7 +2371,7 @@ class SubtitleRequest(BaseModel):
 
 
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
-async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
+async def get_clip_transcript(job_id: str, clip_index: int, request: Request, format: str = "vertical"):
     """Return word-level captions for a specific clip, formatted for Remotion."""
     await _ensure_job_files(job_id, request)
     if job_id not in jobs:
@@ -2366,10 +2420,32 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
 
     duration_sec = clip_end - clip_start
 
+    # The letterboxed format pads its footage into a canvas much taller than
+    # the visible picture, so a caption preview sized for the full canvas
+    # (the other two formats' assumption) reads oversized against the
+    # actual video — same reasoning as /api/subtitle's content_scale. The
+    # frontend preview has no way to detect this itself (a browser <video>
+    # tag doesn't expose pixel content the way ffmpeg's cropdetect does),
+    # so hand it the same fraction the server burn would use.
+    letterbox_content_fraction = None
+    if format == 'letterboxed':
+        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        letterboxed_filename = _canonical_clip_file(output_dir, base_name, clip_index, suffix='_letterboxed')
+        # MUST be the file WITHOUT burned captions: cropdetect reads bright
+        # caption text sitting in the black bar as "content", inflating the
+        # measured band — on an already-captioned file this returned ~0.50
+        # instead of the true ~0.32, showing the preview a smaller shrink
+        # than the server burn actually used on the clean base underneath.
+        clean_filename, stripped_ok = _strip_burned_captions(output_dir, letterboxed_filename)
+        letterboxed_path = os.path.join(output_dir, clean_filename if stripped_ok else letterboxed_filename)
+        if os.path.exists(letterboxed_path):
+            letterbox_content_fraction = detect_content_band_fraction(letterboxed_path)
+
     return {
         "captions": captions,
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
+        "letterboxContentFraction": letterbox_content_fraction,
     }
 
 
@@ -3263,14 +3339,15 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
             sub_start, sub_end = 0.0, max(w["end"] for w in edited)
 
     # Video Path
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
     if req.input_filename:
         # Use chained file
         filename = os.path.basename(req.input_filename)
+        _assert_filename_belongs_to_clip(filename, base_name, req.clip_index)
     else:
         # Fallback to standard naming
         filename = clip_data.get('video_url', '').split('/')[-1]
         if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
     # Re-subtitling must replace previous subtitles instead of burning over them.
@@ -3296,11 +3373,25 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     srt_filename = f"subs_{req.clip_index}_{generation_id}.{'ass' if is_karaoke else 'srt'}"
     srt_path = os.path.join(output_dir, srt_filename)
 
+    # The letterboxed format pads its footage into a canvas much taller than
+    # the visible picture (black bars top/bottom) — a font/border size tuned
+    # against the FULL canvas the way the other two formats use it looks
+    # oversized against the actual video. Shrink to the real content band,
+    # detected from the file's own pixels (see detect_content_band_fraction's
+    # docstring for why pixel-detection instead of recomputing from a source
+    # aspect ratio this endpoint doesn't have on hand). No-op (1.0) for the
+    # other two formats.
+    content_scale = 1.0
+    if _format_field_for_filename(filename) == 'video_url_letterboxed':
+        content_scale = detect_content_band_fraction(input_path)
+    effective_font_size = max(1, req.font_size * content_scale)
+    effective_border_width = max(0, req.border_width * content_scale)
+
     # Style options shared by the karaoke ASS generator paths.
     karaoke_opts = dict(
-        alignment=req.position, fontsize=req.font_size, font_name=req.font_name,
+        alignment=req.position, fontsize=effective_font_size, font_name=req.font_name,
         font_color=req.font_color, border_color=req.border_color,
-        border_width=req.border_width, highlight_color=req.highlight_color,
+        border_width=effective_border_width, highlight_color=req.highlight_color,
         bg_color=req.bg_color, bg_opacity=req.bg_opacity,
         effect=req.effect, base_opacity=req.base_opacity, uppercase=req.uppercase,
     )
@@ -3350,13 +3441,39 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
 
         # 2. Burn Subtitles
         # Run in thread pool
+        is_horizontal = _format_field_for_filename(filename) == 'video_url_horizontal'
+
         def run_burn():
-             burn_subtitles(input_path, srt_path, output_path,
-                           alignment=req.position, fontsize=req.font_size,
-                           font_name=req.font_name, font_color=req.font_color,
-                           border_color=req.border_color, border_width=req.border_width,
-                           bg_color=req.bg_color, bg_opacity=req.bg_opacity)
-        
+            if is_horizontal:
+                # The "girar móvil" file is already rotated 90° — burning
+                # straight onto it (like the other two formats) puts the
+                # caption at "bottom" of the ROTATED frame, which is the
+                # source's right edge, and the text itself stays upright
+                # while the picture is sideways (see render_rotate_to_
+                # landscape / render_unrotate_from_landscape's docstrings).
+                # Undo the rotation, burn in native orientation, redo it —
+                # same order main.py's initial generation already uses.
+                import main as _main
+                work_dir = tempfile.mkdtemp(prefix="restyle_rotate_")
+                try:
+                    native_path = os.path.join(work_dir, "native.mp4")
+                    native_captioned_path = os.path.join(work_dir, "native_captioned.mp4")
+                    _main.render_unrotate_from_landscape(input_path, native_path)
+                    burn_subtitles(native_path, srt_path, native_captioned_path,
+                                  alignment=req.position, fontsize=effective_font_size,
+                                  font_name=req.font_name, font_color=req.font_color,
+                                  border_color=req.border_color, border_width=effective_border_width,
+                                  bg_color=req.bg_color, bg_opacity=req.bg_opacity)
+                    _main.render_rotate_to_landscape(native_captioned_path, output_path)
+                finally:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+            else:
+                burn_subtitles(input_path, srt_path, output_path,
+                              alignment=req.position, fontsize=effective_font_size,
+                              font_name=req.font_name, font_color=req.font_color,
+                              border_color=req.border_color, border_width=effective_border_width,
+                              bg_color=req.bg_color, bg_opacity=req.bg_opacity)
+
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, run_burn)
         
@@ -3433,11 +3550,13 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     if req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
 
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
     filename = os.path.basename(
         req.input_filename
         or (clips[req.clip_index].get('video_url') or '').split('/')[-1]
-        or f"{os.path.basename(json_files[0]).replace('_metadata.json', '')}"
-           f"_clip_{req.clip_index + 1}.mp4")
+        or f"{base_name}_clip_{req.clip_index + 1}.mp4")
+    if req.input_filename:
+        _assert_filename_belongs_to_clip(filename, base_name, req.clip_index)
 
     # Same walk-back the burn path uses, so this undoes any number of restyles.
     while True:
@@ -3499,16 +3618,17 @@ async def add_hook(req: HookRequest, request: Request):
         raise HTTPException(status_code=404, detail="Clip not found")
         
     clip_data = clips[req.clip_index]
-    
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+
     # Video Path
     if req.input_filename:
         filename = os.path.basename(req.input_filename)
+        _assert_filename_belongs_to_clip(filename, base_name, req.clip_index)
     else:
         filename = clip_data.get('video_url', '').split('/')[-1]
         if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
-         
+
     input_path = os.path.join(output_dir, filename)
     if not os.path.exists(input_path):
         raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
@@ -3543,10 +3663,30 @@ async def add_hook(req: HookRequest, request: Request):
     reservation_id = await reserve_managed_action(
         request, hook_minutes, req.job_id, "hook")
 
+    is_horizontal = _format_field_for_filename(filename) == 'video_url_horizontal'
+
     try:
         # Run in thread pool
         def run_hook():
-             add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=req.duration_seconds, style=req.style)
+            if is_horizontal:
+                # Same reasoning as /api/subtitle's horizontal branch: the
+                # file is already rotated 90°, so overlaying text straight
+                # onto it draws the hook card upright on a sideways picture.
+                # Undo the rotation, overlay in native orientation, redo it.
+                import main as _main
+                work_dir = tempfile.mkdtemp(prefix="hook_rotate_")
+                try:
+                    native_path = os.path.join(work_dir, "native.mp4")
+                    native_hooked_path = os.path.join(work_dir, "native_hooked.mp4")
+                    _main.render_unrotate_from_landscape(input_path, native_path)
+                    add_hook_to_video(native_path, req.text, native_hooked_path,
+                                     position=req.position, font_scale=font_scale,
+                                     duration=req.duration_seconds, style=req.style)
+                    _main.render_rotate_to_landscape(native_hooked_path, output_path)
+                finally:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+            else:
+                add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=req.duration_seconds, style=req.style)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, run_hook)

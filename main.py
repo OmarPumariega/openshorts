@@ -852,6 +852,30 @@ def render_rotate_to_landscape(input_video, final_output_video):
     return True
 
 
+def render_unrotate_from_landscape(input_video, final_output_video):
+    """Inverse of render_rotate_to_landscape (transpose=2 undoes transpose=1).
+
+    Generation time always has the pre-rotation source clip on hand, so
+    _process_rotated_format captions it BEFORE rotating (see that function
+    and render_rotate_to_landscape's own docstring for why order matters
+    here). A later re-style (app.py's /api/subtitle) only has the already-
+    rotated "_horizontal" file left to work from — the pre-rotation cut is
+    long gone by then — so it needs to undo the rotation first, burn onto
+    the now-native-orientation frame, then redo the rotation with
+    render_rotate_to_landscape. Skipping this step is exactly what produced
+    upright, wrong-edge captions on a rotated (sideways) picture.
+    """
+    if os.path.exists(final_output_video):
+        os.remove(final_output_video)
+    cmd = [
+        'ffmpeg', '-y', '-i', input_video, '-vf', 'transpose=2',
+        *video_encode_args(QUALITY_FAST), *audio_encode_args(),
+        final_output_video,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    return True
+
+
 def _process_rotated_format(i, clip_temp_path, output_dir, video_title, transcript, start, end):
     """The "girar móvil" format's own render+caption handling — pulled out of
     _process_one_clip's generic variants loop because this is the one format
@@ -932,10 +956,15 @@ def render_letterbox_fit(input_video, final_output_video, aspect_ratio=ASPECT_RA
     if not orig_w or not orig_h:
         raise IOError(f"Could not read resolution of {input_video}")
 
-    out_h = orig_h if orig_h >= orig_w else int(orig_w / aspect_ratio)
-    out_w = int(out_h * aspect_ratio)
-    out_w += out_w % 2
-    out_h += out_h % 2
+    # Canonical 9:16 canvas, same sizing convention the face-tracked crop
+    # uses (reframe_v2.delivery_size) — NOT derived straight from the
+    # landscape source's own width. That earlier approach set canvas
+    # height to orig_w / aspect_ratio, which for a normal 1920px-wide clip
+    # produced a 1920x3413 canvas: 2-4x the pixels of a normal short,
+    # slow enough to encode that the follow-up caption-burn pass would
+    # occasionally get OOM-killed mid-encode on the VPS's 12GB.
+    from reframe_v2 import delivery_size
+    out_w, out_h = delivery_size(orig_w, orig_h, aspect_ratio)
 
     vf = (
         f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
@@ -951,7 +980,7 @@ def render_letterbox_fit(input_video, final_output_video, aspect_ratio=ASPECT_RA
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
+def auto_caption_clip(clip_path, transcript, clip_start, clip_end, size_scale=1.0):
     """Burn the default caption style onto a finished clip.
 
     Captions are mandatory for short-form to land, but they were opt-in behind a
@@ -963,6 +992,12 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
     the untouched original stays on disk and re-styling from the modal replaces
     the captions instead of burning a second layer over them.
 
+    ``size_scale``: shrinks fontsize/border proportionally — the letterboxed
+    format passes subtitles.detect_content_band_fraction() here, since a
+    caption sized for the FULL canvas looks oversized against the much
+    smaller visible footage that format pads with black bars (see that
+    function's docstring). 1.0 (default) leaves the configured style as-is.
+
     Returns the captioned path, or None when captions were skipped (silent
     video, no words in range, AUTO_CAPTIONS=0, or any failure — a caption
     problem must never cost the user the clip they already paid for).
@@ -973,7 +1008,10 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
         return None  # silent video: nothing to caption
     try:
         import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
+        style = dict(_subs.AUTO_CAPTION_STYLE)
+        if size_scale != 1.0:
+            style["font_size"] = max(1, style["font_size"] * size_scale)
+            style["border_width"] = max(0, style["border_width"] * size_scale)
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -1812,7 +1850,17 @@ if __name__ == '__main__':
                             apply_watermark(variant_path)
                         # Captions last, so they sit on top of the watermark and
                         # the canonical file stays clean for re-styling.
-                        auto_caption_clip(variant_path, transcript, start, end)
+                        # The letterboxed format pads the footage into a much
+                        # taller canvas than it fills (black bars top/bottom)
+                        # — sizing captions off the full canvas the way the
+                        # other formats do makes them look huge against the
+                        # actual picture, so shrink/position them to the real
+                        # visible content band instead.
+                        size_scale = 1.0
+                        if suffix == "_letterboxed":
+                            import subtitles as _subs
+                            size_scale = _subs.detect_content_band_fraction(variant_path)
+                        auto_caption_clip(variant_path, transcript, start, end, size_scale=size_scale)
                         print(f"   ✅ Clip {i+1}{suffix} ready: {variant_path}")
 
                     if _process_rotated_format(i, clip_temp_path, output_dir, video_title,

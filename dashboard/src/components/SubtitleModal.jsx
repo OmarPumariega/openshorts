@@ -10,6 +10,45 @@ import {
     loadCustomPresets, saveCustomPreset, deleteCustomPreset, updateCustomPreset, customPresetToStyle,
 } from '../lib/subtitleStyle';
 
+// The modal's fontSize/borderWidth sliders are small numbers (10-200, 0-10)
+// tuned for the server burn's ASS virtual canvas (PlayResY=288 — see
+// subtitles.py's burn_subtitles/generate_ass), while the Remotion preview
+// sets a literal CSS pixel font-size on its fixed 1080x1920 composition
+// (see Subtitles.tsx). libass does NOT scale PlayResY->video_height
+// uniformly the way `video_h / PlayResY` assumes — it fits the script's
+// (PlayResX x PlayResY) box into the frame, and since PlayResX is left
+// unset here, libass defaults it to a 4:3 guess (288 * 4/3 = 384, visible
+// in ffmpeg's own logs as "PlayResX undefined, setting to 384") which has
+// nothing to do with a vertical 9:16 video's real proportions. A first
+// attempt to fix the original mismatch assumed the naive video_h/PlayResY
+// scale and made every preview render ~2.5x TOO LARGE.
+//
+// So this is measured empirically instead of derived from the (evidently
+// unreliable) theory of how libass scales:
+//   1. Burned a real clip server-side (subtitles.py, UI fontSize=60 ->
+//      ASS Fontsize 51) on a real 1080x1920 video and measured the
+//      rendered glyph bounding box: 216px tall.
+//   2. Rendered the SAME word through this Remotion composition (the
+//      render-service's headless-Chromium path, same component as this
+//      preview) at a plain CSS fontSize=100 on the same 1080x1920 canvas
+//      and measured its bbox: 76px tall (width-based cross-check: 772px
+//      vs 276px -> same ~2.8x ratio, so the two measurements agree).
+//   3. Required CSS fontSize to match step 1's 216px = 216 / (76/100) =
+//      284.2 -> scale = 284.2 / 60 = 4.737.
+// borderWidth: burn_subtitles() uses it as-is (no *0.85) as the ASS
+// Outline value, in the same virtual-unit space as Fontsize, so it scales
+// by the same real-px-per-ASS-unit factor measured in step 1/3 above
+// (216px / 51 units = 4.235), without the 0.85 step fontSize goes through.
+//
+// Re-measure with the same method (burn a known clip, extract a frame,
+// measure the glyph bbox in pixels) if subtitles.py's formula, the
+// PlayResY constant, or this composition's layout ever changes — the two
+// renderers (libass vs a browser engine) don't share a font-metrics model,
+// so there's no formula to re-derive this from, only remeasuring.
+const PREVIEW_CANVAS_HEIGHT = 1920;
+const PREVIEW_FONT_SCALE = 4.737;
+const PREVIEW_BORDER_SCALE = 4.235;
+
 const ANIMATION_OPTIONS = [
     { value: 'pop', label: 'Rebote' },
     { value: 'word-highlight', label: 'Brillo' },
@@ -143,13 +182,20 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [durationSec, setDurationSec] = useState(30);
     const [captionsLoading, setCaptionsLoading] = useState(false);
     const [useRemotionPreview, setUseRemotionPreview] = useState(false);
+    // Only set for format='letterboxed': how much of the canvas is actual
+    // footage vs. the black bars that format pads in, so the preview can
+    // shrink text the same way the server burn does (see PREVIEW_FONT_SCALE
+    // above and /api/subtitle's own content_scale — same number, same
+    // reasoning, just detected server-side and handed to us here since a
+    // browser <video> can't run ffmpeg's cropdetect on itself).
+    const [letterboxContentFraction, setLetterboxContentFraction] = useState(1.0);
 
     // Fetch word-level captions when modal opens
     useEffect(() => {
         if (!isOpen || !jobId || clipIndex === undefined) return;
 
         setCaptionsLoading(true);
-        apiFetch(`/api/clip/${jobId}/${clipIndex}/transcript`)
+        apiFetch(`/api/clip/${jobId}/${clipIndex}/transcript?format=${format}`)
             .then((res) => res.ok ? res.json() : null)
             .then((data) => {
                 if (data && data.captions && data.captions.length > 0) {
@@ -161,10 +207,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 } else {
                     setUseRemotionPreview(false);
                 }
+                setLetterboxContentFraction(data?.letterboxContentFraction ?? 1.0);
             })
             .catch(() => setUseRemotionPreview(false))
             .finally(() => setCaptionsLoading(false));
-    }, [isOpen, jobId, clipIndex]);
+    }, [isOpen, jobId, clipIndex, format]);
 
     // When user edits text, redistribute words across original timestamps
     const handleTextEdit = (newText) => {
@@ -196,11 +243,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         position,
         style: {
             fontFamily: fontName,
-            fontSize: fontSize * 2.2, // Scale up for 1080p (modal fontSize is for small preview)
+            fontSize: fontSize * PREVIEW_FONT_SCALE * letterboxContentFraction,
             fontColor,
             highlightColor,
             borderColor,
-            borderWidth: borderWidth * 1.5,
+            borderWidth: borderWidth * PREVIEW_BORDER_SCALE * letterboxContentFraction,
             bgColor,
             bgOpacity,
             animation,
@@ -220,10 +267,17 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         `-${bw}px 0 0 ${bc}`, `${bw}px 0 0 ${bc}`,
     ].join(', ') : 'none';
 
+    // Same calibration as subtitleConfig.style above (PREVIEW_FONT_SCALE is
+    // specific to the Remotion canvas's fixed 1920px height), scaled down
+    // to this box's own CSS height — this path renders as a literal DOM
+    // element with no fixed internal composition, and the surrounding
+    // container caps out at 600px tall (see the `max-h-[600px]` wrapper
+    // below).
+    const fallbackPreviewHeight = 600;
     const fallbackPreviewStyle = {
         fontFamily: fontName,
         color: fontColor,
-        fontSize: '20px',
+        fontSize: `${(fontSize * PREVIEW_FONT_SCALE * letterboxContentFraction * (fallbackPreviewHeight / PREVIEW_CANVAS_HEIGHT)).toFixed(1)}px`,
         fontWeight: 'bold',
         maxWidth: '85%',
         padding: '6px 12px',

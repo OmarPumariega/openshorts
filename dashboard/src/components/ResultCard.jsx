@@ -47,7 +47,7 @@ const FORMAT_LABEL = {
 // format, in the fixed order every clip renders them.
 const FORMAT_SUBINDEX = { vertical: 1, horizontal: 2, letterboxed: 3 };
 
-export default function ResultCard({ clip, index, jobId, format = 'vertical', durableUrl, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, onEditClip = null, onReframeClip = null }) {
+export default function ResultCard({ clip, index, jobId, format = 'vertical', durableUrl, isManaged, onPlay, onPause, onBulkSubtitle, onManualStyle, clipCount = 1, bulkProgress, initialState = null, onStateChange, onEditClip = null, onReframeClip = null }) {
     const urlField = URL_FIELD[format] || 'video_url';
     const clipUrl = clip[urlField];
     const [showDescModal, setShowDescModal] = useState(false);
@@ -295,6 +295,7 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                 }
                 if (videoRef.current) videoRef.current.load();
                 setShowSubtitleModal(false);
+                onManualStyle?.();
             }
         } catch (e) {
             setEditError(e.message);
@@ -325,6 +326,7 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                 setCurrentVideoUrl(blobUrl);
                 if (videoRef.current) videoRef.current.load();
                 setShowSubtitleModal(false);
+                onManualStyle?.();
                 return;
             }
 
@@ -379,6 +381,7 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                 }
                 if (videoRef.current) videoRef.current.load();
                 setShowSubtitleModal(false);
+                onManualStyle?.();
             }
         } catch (e) {
             setEditError(e.message);
@@ -526,7 +529,7 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                     }}
                 />
                 <div className="absolute top-3 left-3 flex gap-2">
-                    <span className="bg-black/70 text-ink font-mono text-micro uppercase px-2 py-1 rounded-full">
+                    <span className="bg-black/70 text-onblack font-mono text-micro uppercase px-2 py-1 rounded-full">
                         Clip {index + 1}.{FORMAT_SUBINDEX[format] || 1} · {FORMAT_LABEL[format] || format}
                     </span>
                 </div>
@@ -535,8 +538,8 @@ export default function ResultCard({ clip, index, jobId, format = 'vertical', du
                 {isEditing && (
                     <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 p-4 text-center">
                         <Loader2 size={28} className="text-brass animate-spin mb-3" />
-                        <span className="text-xs text-ink lowercase">magia de la IA en progreso…</span>
-                        <span className="readout mt-1.5">APLICANDO EDICIONES VIRALES · ZOOMS</span>
+                        <span className="text-xs text-onblack lowercase">magia de la IA en progreso…</span>
+                        <span className="readout text-onblackmuted mt-1.5">APLICANDO EDICIONES VIRALES · ZOOMS</span>
                     </div>
                 )}
             </div>

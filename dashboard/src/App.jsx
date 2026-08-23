@@ -7,7 +7,6 @@ import ClipEditor from './components/ClipEditor';
 import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
-import StarBanner from './components/StarBanner';
 import PlanChoiceModal from './components/PlanChoiceModal';
 import TrialUpgradeModal from './components/TrialUpgradeModal';
 import LoginModal from './components/LoginModal';
@@ -20,7 +19,7 @@ import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 import { loadAllDefaultStyles, saveDefaultStyle, clearDefaultStyle, FORMATS } from './lib/subtitleStyle';
 import DefaultStyleEditor from './components/DefaultStyleEditor';
-import { loadJobList, saveJobList, titleFor, loadAutoStyledJobs, markJobAutoStyled } from './lib/jobList';
+import { loadJobList, saveJobList, titleFor, loadAutoStyledJobs, markJobAutoStyled, loadAutoStyledClips, markClipAutoStyled } from './lib/jobList';
 import JobSwitcher from './components/JobSwitcher';
 
 // Simple TikTok icon sine Lucide might not have it or it varies
@@ -83,6 +82,21 @@ function App() {
   //    skips whatever clips that earlier attempt did finish, instead of
   //    re-burning them.
   const autoStyledJobRef = useRef(loadAutoStyledJobs());
+  // Per-clip half of the same ledger — see lib/jobList.js's
+  // loadAutoStyledClips docstring for why this exists instead of trusting
+  // the server filename: every clip already has a "subtitled_" file the
+  // instant it's generated (the server's own unconditional auto-caption
+  // pass), so that prefix can't tell "already got the user's chosen
+  // default" apart from "just the server's factory caption, still needs
+  // it". Keyed "jobId:format:clipIndex".
+  const autoStyledClipsRef = useRef(loadAutoStyledClips());
+  // A clip the user has styled by hand (opened the subtitle editor on that
+  // specific card and saved/removed captions) THIS page load — the default-
+  // style auto-apply must never overwrite that, even if it hasn't reached
+  // its own per-clip ledger entry for it yet (see handleBulkSubtitles).
+  // In-memory only: a manual edit from a previous session already produced
+  // a file the auto-apply ledger above won't re-touch anyway once it runs.
+  const manuallyStyledRef = useRef(new Set());
   // Every video this browser has started, tracked independently of which one
   // is on screen — lets starting a new upload not lose one still processing.
   // See lib/jobList.js. jobListRef mirrors the state for the background
@@ -279,7 +293,32 @@ function App() {
     for (let n = 0; n < total; n++) {
       const i = indices[n];
       if (isFocused) setBulkSub({ running: true, current: n + 1, total, errors });
-      if (skipAlreadyStyled && /\/subtitled_/.test(clips[i][urlField] || '')) continue;
+      const clipKey = `${targetJobId}:${format}:${i}`;
+      // `clips` is a snapshot taken once, when this call started — for the
+      // automatic default-style pass that's the moment the job finished, but
+      // this loop burns one real ffmpeg encode per clip/format, so by the
+      // time it reaches clip N several minutes may have passed. Two reasons
+      // to leave a clip alone, neither of which the server filename can
+      // tell us (every clip already has a "subtitled_" file the instant
+      // it's generated — main.py's own unconditional auto-caption pass —
+      // so that prefix means nothing about whether MY chosen style landed):
+      //  - manuallyStyledRef: the user opened this exact clip's editor and
+      //    saved/removed captions themselves, possibly after this pass
+      //    started — their choice always wins.
+      //  - autoStyledClipsRef: this exact automatic pass already burned
+      //    this clip+format on an earlier (possibly interrupted) run.
+      let currentUrl = clips[i][urlField];
+      if (skipAlreadyStyled) {
+        if (manuallyStyledRef.current.has(clipKey) || autoStyledClipsRef.current.has(clipKey)) continue;
+        try {
+          const fresh = await pollJob(targetJobId);
+          currentUrl = fresh?.result?.clips?.[i]?.[urlField] ?? currentUrl;
+        } catch { /* status check failed — fall back to the snapshot */ }
+        // The refetch above can only catch a manual edit that already made
+        // it to the server; re-check the in-memory marker too in case the
+        // user saved literally while that request was in flight.
+        if (manuallyStyledRef.current.has(clipKey)) continue;
+      }
       try {
         const res = await apiFetch('/api/subtitle', {
           method: 'POST',
@@ -300,11 +339,26 @@ function App() {
             effect: options.effect || 'none',
             base_opacity: options.baseOpacity ?? 1.0,
             uppercase: options.uppercase || false,
-            // Chain from the clip's current server file for THIS format.
-            input_filename: (clips[i][urlField] || '').split('/').pop(),
+            // Chain from the clip's current server file for THIS format —
+            // currentUrl, not the possibly-stale clips[i][urlField], so a
+            // manual edit that landed after this loop started (but too late
+            // for the skip check above, e.g. still mid-encode) is still the
+            // base this chains onto rather than getting silently discarded.
+            input_filename: (currentUrl || '').split('/').pop(),
           }),
         });
-        if (!res.ok) errors++;
+        if (!res.ok) {
+          errors++;
+        } else if (skipAlreadyStyled) {
+          autoStyledClipsRef.current.add(clipKey);
+          markClipAutoStyled(clipKey);
+        } else {
+          // The manual "aplicar a todos" button on a card — also a
+          // deliberate user choice, so a default-style pass that hasn't
+          // run yet (e.g. still starting up right after the job finished)
+          // must not steamroll it either.
+          manuallyStyledRef.current.add(clipKey);
+        }
       } catch {
         errors++;
       }
@@ -315,6 +369,26 @@ function App() {
       const data = await pollJob(targetJobId);
       if (isFocused && data.result) setResults(data.result);
     } catch { /* keep current results */ }
+    return errors;
+  };
+
+  // The subtitle editor's "aplicar este estilo a los N clips" button — one
+  // style, chosen from ONE format's card, applied to every clip in EVERY
+  // format. Not just the format the modal happened to be opened from: "N
+  // clips" reads to the user as "the N detected moments", each of which
+  // ships as three cards (.1/.2/.3) — styling only the one they clicked
+  // from and silently leaving the other two at the factory look was the
+  // reported bug ("lo aplica al 1,2,3,4 pero no a los 1.2,1.3,2.2,2.3").
+  // Always force (skipAlreadyStyled=false): this is an explicit, one-off
+  // user action, not the background default-style pass, so it should win
+  // over whatever is currently on a clip — including one the user styled
+  // by hand a moment ago, same as the pre-existing single-format version
+  // of this button always did.
+  const applyStyleToAllFormats = async (options, targetJobId, clips) => {
+    let errors = 0;
+    for (const { id: format } of FORMATS) {
+      errors += (await handleBulkSubtitles(options, targetJobId, clips, false, format)) || 0;
+    }
     return errors;
   };
 
@@ -397,6 +471,21 @@ function App() {
         setStatus(session.status === 'processing' ? 'processing' : session.status);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
+        // The cached `results` above renders instantly so the tab isn't blank
+        // while this resolves, but it's a snapshot from whenever this browser
+        // last saved it — a clip file can legitimately change on disk after
+        // that (a re-style, a server-side bugfix reprocessing an old file)
+        // with no way for this tab to know. Refresh once from the server so
+        // a stale video_url (e.g. pointing at a file that no longer exists)
+        // gets corrected instead of surviving until the next full job switch.
+        if (session.status !== 'processing') {
+          pollJob(session.jobId)
+            .then((data) => {
+              if (data.result) setResults(data.result);
+              if (data.logs) setLogs(data.logs);
+            })
+            .catch(() => { /* offline or job gone from server — keep cached results */ });
+        }
       }
     } catch (e) {
       localStorage.removeItem(SESSION_KEY);
@@ -1005,13 +1094,6 @@ function App() {
                   />
                 )}
 
-                {/* The wait is dead time — the best moment to ask for a star. */}
-                {status === 'processing' && (
-                  <div className="my-3">
-                    <StarBanner message="¿Gratis mientras se genera?" />
-                  </div>
-                )}
-
                 {/* Logs Terminal */}
                 <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
                   <div className="px-4 py-2 border-b border-rule flex items-center justify-between bg-paper2 shrink-0">
@@ -1068,21 +1150,18 @@ function App() {
                   )}
                 </h2>
 
-                {status === 'complete' && results?.clips?.length > 0 && (
+                {status === 'complete' && results?.clips?.length > 0 && plan === 'free' && (
                   <div className="mb-2 space-y-2">
                     {/* Peak-moment upsell: they just SAW their clips — sell while
-                        they're proud of the result, before asking for stars. */}
-                    {plan === 'free' && (
-                      <button
-                        onClick={() => { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }}
-                        className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
-                      >
-                        <span className="text-ink">¿Te gustan estos clips?</span>{' '}
-                        <span className="text-muted">Llevan marca de agua y se eliminan en 7 días.</span>{' '}
-                        <span className="text-brass font-medium">Consérvalos para siempre →</span>
-                      </button>
-                    )}
-                    <StarBanner message="¿Contento con tus clips?" />
+                        they're proud of the result. */}
+                    <button
+                      onClick={() => { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }}
+                      className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
+                    >
+                      <span className="text-ink">¿Te gustan estos clips?</span>{' '}
+                      <span className="text-muted">Llevan marca de agua y se eliminan en 7 días.</span>{' '}
+                      <span className="text-brass font-medium">Consérvalos para siempre →</span>
+                    </button>
                   </div>
                 )}
 
@@ -1113,7 +1192,8 @@ function App() {
                               isManaged={isManaged}
                               onPlay={f.id === 'vertical' ? (time) => handleClipPlay(time) : undefined}
                               onPause={f.id === 'vertical' ? handleClipPause : undefined}
-                              onBulkSubtitle={(options) => handleBulkSubtitles(options, jobId, results.clips, false, f.id)}
+                              onBulkSubtitle={(options) => applyStyleToAllFormats(options, jobId, results.clips)}
+                              onManualStyle={() => manuallyStyledRef.current.add(`${jobId}:${f.id}:${i}`)}
                               clipCount={results.clips.length}
                               bulkProgress={bulkSub}
                             />
