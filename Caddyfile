@@ -1,15 +1,12 @@
-# Reverse proxy + TLS for the private Clip Generator instance.
+# Reverse proxy + TLS for the Clip Generator instance.
 #
-# {$DOMAIN} / {$BASIC_AUTH_USER} come straight from .env. The password hash
-# is NOT read from an env var directly — Caddy's basic_auth needs a bcrypt
-# hash, but CLAUDE.md's contract is a plain BASIC_AUTH_PASSWORD in .env, so
-# caddy/docker-entrypoint.sh hashes it once at container start and exports
-# BASIC_AUTH_PASSWORD_HASH before caddy reads this file. Never put a plain
-# password in this file or commit a hash to version control.
+# {$DOMAIN} comes straight from .env. Basic auth is OPTIONAL: if
+# BASIC_AUTH_USER/BASIC_AUTH_PASSWORD are set, caddy/docker-entrypoint.sh
+# hashes the password (bcrypt) and writes the auth block into
+# /etc/caddy/auth.caddy; if they are unset, that snippet is empty and the
+# site is served with no authentication.
 {$DOMAIN} {
-	basic_auth {
-		{$BASIC_AUTH_USER} {$BASIC_AUTH_PASSWORD_HASH}
-	}
+	import /etc/caddy/auth.caddy
 
 	# Clip delivery and the pipeline API — everything else is the SPA.
 	handle /api/* {

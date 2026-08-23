@@ -1,15 +1,20 @@
 #!/bin/sh
-# Hash BASIC_AUTH_PASSWORD (plain, from .env per CLAUDE.md's contract) into
-# the bcrypt hash Caddy's basic_auth directive actually requires, then hand
-# off to the real caddy entrypoint. Runs on every container start — cheap,
-# and keeps the plaintext password out of the Caddyfile and image layers.
+# Basic auth is OPTIONAL. If BASIC_AUTH_USER and BASIC_AUTH_PASSWORD are both
+# set, hash the password (plain, from .env) into the bcrypt hash Caddy's
+# basic_auth directive requires and write the auth snippet. If they are unset
+# or empty, write an empty snippet and serve the site with no auth — for
+# private/locked-down deployments set both vars (see DEPLOY.md).
 set -eu
 
-if [ -z "${BASIC_AUTH_USER:-}" ] || [ -z "${BASIC_AUTH_PASSWORD:-}" ]; then
-	echo "caddy: BASIC_AUTH_USER and BASIC_AUTH_PASSWORD must be set in .env — refusing to start with the UI unprotected." >&2
-	exit 1
-fi
+AUTH_SNIPPET=/etc/caddy/auth.caddy
 
-export BASIC_AUTH_PASSWORD_HASH="$(caddy hash-password --plaintext "$BASIC_AUTH_PASSWORD")"
+if [ -n "${BASIC_AUTH_USER:-}" ] && [ -n "${BASIC_AUTH_PASSWORD:-}" ]; then
+	export BASIC_AUTH_PASSWORD_HASH="$(caddy hash-password --plaintext "$BASIC_AUTH_PASSWORD")"
+	printf 'basic_auth {\n\t{$BASIC_AUTH_USER} {$BASIC_AUTH_PASSWORD_HASH}\n}\n' > "$AUTH_SNIPPET"
+	echo "caddy: basic auth enabled for user \${BASIC_AUTH_USER}"
+else
+	: > "$AUTH_SNIPPET"
+	echo "caddy: BASIC_AUTH_USER/PASSWORD not set — serving with NO authentication."
+fi
 
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
