@@ -132,3 +132,73 @@ git log --oneline -5      # find the previous commit/tag
 git checkout <previous-ref>
 docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+---
+
+# Deploy on the shared Contabo VPS (clip.agenciaciro.com, behind coolify-proxy)
+
+The stack also runs on the **shared** VPS (84.46.249.81, Ubuntu 24.04, 6 vCPU /
+12 GB) that hosts everything else under **Coolify**. There, ports 80/443 belong
+to `coolify-proxy` (Traefik), so we do NOT publish ports and do NOT issue TLS
+from Caddy. Instead use `docker-compose.vps.yml`:
+
+- Fully isolated: own compose project (`clip`), own `clip` network, own named
+  volumes (`clip_output`, `clip_uploads`) — nothing is shared with Coolify apps
+  except the external `coolify` network that the `caddy` gateway joins.
+- coolify-proxy (Traefik) terminates TLS for `clip.agenciaciro.com`
+  (Let's Encrypt HTTP-01) and forwards to the internal caddy, which keeps the
+  basic-auth layer and proxies to backend/frontend as usual.
+- Memory caps keep the video pipeline from starving the neighboring WordPress
+  sites: backend 3g, renderer 1g.
+
+## 1. DNS
+
+An **A record** for `clip.agenciaciro.com` must point **directly** at
+`84.46.249.81` (no CDN/proxy in front — Traefik's HTTP-01 challenge needs to
+reach the VPS on port 80). Verify before deploying:
+
+```bash
+dig +short clip.agenciaciro.com   # must return 84.46.249.81
+```
+
+## 2. Provision
+
+```bash
+ssh root@84.46.249.81
+mkdir -p /opt/clip
+git clone -b main https://github.com/OmarPumariega/openshorts.git /opt/clip
+```
+
+Copy your `.env` into `/opt/clip/.env` and set (differs from the standalone
+deploy):
+
+```
+DOMAIN=:80                          # caddy = plain HTTP behind the proxy
+CLIP_DOMAIN=clip.agenciaciro.com    # public hostname routed by Traefik
+MAX_CONCURRENT_JOBS=1               # shared box: 1 job at a time
+WHISPER_MODEL=small
+WHISPER_CPU_THREADS=3
+CLEANUP_RETENTION_HOURS=48
+OUTPUT_MAX_GB=10                    # only ~45 GB free on the shared disk
+UPLOADS_MAX_GB=5
+```
+
+## 3. Bring up
+
+```bash
+cd /opt/clip
+docker compose -f docker-compose.vps.yml up -d --build
+```
+
+## 4. Verify
+
+```bash
+docker compose -f docker-compose.vps.yml ps          # 4 services healthy
+docker logs coolify-proxy 2>&1 | tail                # LE certificate issued
+curl -I https://clip.agenciaciro.com                 # 401 (basic auth challenge)
+curl -I -u "<user>:<pass>" https://clip.agenciaciro.com   # 200
+```
+
+## Updating / rolling back
+
+Same as the standalone flow, with `-f docker-compose.vps.yml`.

@@ -1,0 +1,112 @@
+# Stack for the shared Contabo VPS (84.46.249.81) behind the existing
+# coolify-proxy (Traefik). This stack is fully isolated: own compose project
+# ("clip"), own network, own named volumes — it only plugs into the proxy's
+# external `coolify` network through the `caddy` gateway container.
+#
+# TLS for CLIP_DOMAIN is issued by coolify-proxy's Traefik (Let's Encrypt,
+# HTTP-01). Caddy runs as the internal gateway on plain HTTP (:80) and keeps
+# the basic-auth layer. Bring up with:
+#   docker compose -f docker-compose.vps.yml up -d --build
+#
+# Requires a populated .env next to this file (see .env.example):
+#   DOMAIN=:80            (caddy serves plain HTTP behind the proxy)
+#   CLIP_DOMAIN=clip.agenciaciro.com   (public hostname, routed by Traefik)
+services:
+  backend:
+    build: .
+    container_name: clip-backend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - clip_output:/app/output
+      - clip_uploads:/app/uploads
+    networks:
+      - clip
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  renderer:
+    build:
+      context: .
+      dockerfile: render-service/Dockerfile
+    container_name: clip-renderer
+    restart: unless-stopped
+    volumes:
+      - clip_output:/output
+    environment:
+      - REMOTION_BUNDLE_PATH=/app/remotion
+      - OUTPUT_DIR=/output
+      - PORT=3100
+    networks:
+      - clip
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./dashboard
+      target: prod
+      args:
+        # Empty = same-origin: the proxy serves the SPA and /api on the same
+        # domain, so the frontend just calls relative paths.
+        VITE_API_URL: ""
+    container_name: clip-frontend
+    restart: unless-stopped
+    networks:
+      - clip
+
+  caddy:
+    build: ./caddy
+    container_name: clip-caddy
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - clip
+      - coolify
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      # HTTPS router — certificate issued by coolify-proxy's letsencrypt resolver
+      - traefik.http.routers.clip.rule=Host(`${CLIP_DOMAIN:-clip.agenciaciro.com}`)
+      - traefik.http.routers.clip.entrypoints=https
+      - traefik.http.routers.clip.tls=true
+      - traefik.http.routers.clip.tls.certresolver=letsencrypt
+      - traefik.http.services.clip.loadbalancer.server.port=80
+      # HTTP -> HTTPS redirect
+      - traefik.http.routers.clip-http.rule=Host(`${CLIP_DOMAIN:-clip.agenciaciro.com}`)
+      - traefik.http.routers.clip-http.entrypoints=http
+      - traefik.http.middlewares.clip-redirect.redirectscheme.scheme=https
+      - traefik.http.routers.clip-http.middlewares=clip-redirect
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  clip_output:
+  clip_uploads:
+
+networks:
+  clip:
+  coolify:
+    external: true
