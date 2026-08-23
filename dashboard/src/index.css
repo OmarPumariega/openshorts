@@ -25,24 +25,25 @@
 }
 
 @layer components {
-  /* hairline card, lit from within — replaces every glass/surface card */
+  /* white card, soft shadow — replaces the old dark theme's radial-glow trick,
+     which only made sense simulating a card "lit from within" on black */
   .card,
   .glass-panel {
-    background:
-      radial-gradient(120% 90% at 50% 0%, var(--color-paper-emit) 0%, transparent 70%),
-      var(--color-paper-2);
+    background: var(--color-paper);
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
   }
 
   .card-hover {
     transition: transform var(--dur-short) var(--ease-out),
                 border-color var(--dur-short) var(--ease-out),
-                background-color var(--dur-short) var(--ease-out);
+                box-shadow var(--dur-short) var(--ease-out);
   }
   .card-hover:hover {
     transform: translateY(-4px);
     border-color: var(--color-rule-2);
+    box-shadow: var(--shadow-card-hover);
   }
 
   /* mono UPPERCASE micro label — the only uppercase surface */

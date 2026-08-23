@@ -1,49 +1,69 @@
-/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app
+/* Hallmark · genre: clean-saas · theme: daylight (answerthepublic-inspired) · design-system: design.md · designed-as-app
  * macrostructure: Marquee Hero (marketing) / Workbench (app) / Long Document (content)
- * nav: N9 edge-aligned · footer: Ft5 statement · enrichment: filament apparatus (landing only)
+ * nav: N9 edge-aligned · footer: Ft5 statement · enrichment: none (flat, bright, no atmosphere layer)
  * pre-emit critique: P5 H4 E4 S5 R5 V4
  */
 
 :root {
-  /* paper */
-  --color-paper: oklch(13% 0.014 265);
-  --color-paper-2: oklch(16.5% 0.015 265);
-  --color-paper-3: oklch(20% 0.016 265);
+  /* paper — pure white page, faint grey secondary surfaces (was near-black) */
+  --color-paper: oklch(100% 0 0);
+  --color-paper-2: oklch(98.5% 0.002 264);
+  --color-paper-3: oklch(96% 0.003 264);
 
-  /* ink */
-  --color-ink: oklch(96% 0.006 262);
-  --color-ink-2: oklch(86% 0.01 262);
-  --color-muted: oklch(64% 0.012 262);
+  /* ink — near-black text on white (was near-white text on black) */
+  --color-ink: oklch(20% 0.008 264);
+  --color-ink-2: oklch(38% 0.01 264);
+  --color-muted: oklch(58% 0.012 264);
 
-  /* rules */
-  --color-rule: oklch(96% 0.006 262 / 0.08);
-  --color-rule-2: oklch(96% 0.006 262 / 0.14);
-  --rule-blueprint: oklch(96% 0.006 262 / 0.04);
+  /* rules — light grey hairlines instead of translucent white-on-black */
+  --color-rule: oklch(20% 0.008 264 / 0.10);
+  --color-rule-2: oklch(20% 0.008 264 / 0.16);
+  --rule-blueprint: oklch(20% 0.008 264 / 0.05);
 
-  /* accents */
-  --color-accent: oklch(76% 0.17 50);
-  --color-accent-ink: oklch(17% 0.03 50);
-  --color-accent-2: oklch(68% 0.16 18);
-  --color-glow: oklch(80% 0.16 50 / 0.42);
-  --color-paper-emit: oklch(76% 0.17 50 / 0.04);
-  --color-focus: oklch(76% 0.17 50);
+  /* accents — orange-red CTA + near-black "pill badge", matching the
+     answerthepublic.com reference (was warm brass/amber) */
+  --color-accent: oklch(64% 0.19 35);
+  --color-accent-ink: oklch(99% 0 0);
+  --color-accent-2: oklch(58% 0.18 20);
+  --color-glow: oklch(64% 0.19 35 / 0.35);
+  --color-paper-emit: oklch(64% 0.19 35 / 0.05);
+  --color-focus: oklch(64% 0.19 35);
 
-  /* states */
-  --color-ok: oklch(75% 0.11 150);
-  --color-danger: oklch(66% 0.18 25);
-  --color-warn: oklch(78% 0.14 75);
+  /* states — retuned so they still read clearly on white, not just on dark */
+  --color-ok: oklch(58% 0.13 150);
+  --color-danger: oklch(58% 0.19 25);
+  --color-warn: oklch(65% 0.15 75);
 
-  /* type */
-  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  /* on-black — FIXED (not theme-flipped) light text for the video-preview
+     surfaces that stay black regardless of page theme (a video player's
+     own letterboxing, same convention YouTube itself uses). --color-ink/
+     --color-muted flipped from light-on-dark to dark-on-white with this
+     theme, which is correct for the page chrome but would make a badge
+     sitting on a black video thumbnail (e.g. ResultCard's "Clip 1.1"
+     label) render near-invisible dark-on-black — these two exist so that
+     text can opt back into "always light" for exactly those spots. */
+  --color-onblack: oklch(96% 0.006 262);
+  --color-onblack-muted: oklch(72% 0.01 262);
+
+  /* type — one sans family for both display and body (no serif headings in
+     the reference); Geist is already loaded at the heavier weights this
+     needs (see index.html) */
+  --font-display: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --text-display: clamp(3rem, 6vw + 1rem, 6rem);
-  --tracking-display: -0.032em;
+  --text-display: clamp(2.25rem, 4vw + 1rem, 4rem);
+  --tracking-display: -0.02em;
   --tracking-micro: 0.10em;
 
-  /* geometry */
-  --radius-card: 10px;
-  --radius-input: 8px;
+  /* geometry — more generously rounded, matching the reference's pill
+     search bar and soft card corners */
+  --radius-card: 18px;
+  --radius-input: 12px;
+
+  /* elevation — the dark theme faked depth with a radial "emit" glow
+     baked into .card; a white card needs an actual soft shadow instead */
+  --shadow-card: 0 1px 2px oklch(20% 0.008 264 / 0.04), 0 8px 24px oklch(20% 0.008 264 / 0.06);
+  --shadow-card-hover: 0 2px 4px oklch(20% 0.008 264 / 0.05), 0 12px 32px oklch(20% 0.008 264 / 0.09);
 
   /* motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
